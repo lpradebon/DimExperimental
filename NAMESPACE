@@ -1,2 +1,3 @@
 export("calc_paranaiba")
 export("calc_repeticoes")
+export("cal_max_curv_mod")
