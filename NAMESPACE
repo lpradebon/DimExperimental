@@ -1,0 +1,2 @@
+export("calc_paranaiba")
+export("calc_repeticoes")
