@@ -1,4 +1,5 @@
 export("calc_paranaiba")
 export("calc_repeticoes")
 export("cal_max_curv_mod")
-export("LRP")
+export("fit_lrp")
+export("fit_qrp")
