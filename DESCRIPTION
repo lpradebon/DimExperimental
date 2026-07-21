@@ -4,22 +4,22 @@ Title: Tools for Experimental Design Sizing
 Version: 0.1.0
 Authors@R: c(
     person(
-      "Author One", "Surname",
+      "Willyan", "Bandeira",
       email = "author1@example.com",
       role = c("aut", "cre"),
-      comment = c(ORCID = "0000-0000-0000-0001")
+      comment = c(ORCID = "0000-0002-9430-3664")
     ),
     person(
-      "Author Two", "Surname",
+      "Leonardo", "Pradebon",
       email = "author2@example.com",
       role = "aut",
-      comment = c(ORCID = "0000-0000-0000-0002")
+      comment = c(ORCID = "0000-0001-7827-6312")
     ),
     person(
-      "Author Three", "Surname",
+      "Ivan", "Carvalho",
       email = "author3@example.com",
       role = "aut",
-      comment = c(ORCID = "0000-0000-0000-0003")
+      comment = c(ORCID = "0000-0001-7947-4900")
     ),
     person(
       "Author Four", "Surname",
@@ -46,5 +46,6 @@ Depends:
     R (>= 3.5)
 Imports:
     ggplot2,
-    minpack.lm
+    minpack.lm,
+    patchwork
 Config/roxygen2/version: 8.0.0

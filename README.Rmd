@@ -1,0 +1,73 @@
+---
+output: github_document
+---
+
+<!-- README.md is generated from README.Rmd. Please edit that file -->
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.path = "man/figures/README-",
+  out.width = "100%"
+)
+```
+
+# DimExp
+
+<img src="man/figures/logo.png" align="right" height="140" />
+
+<!-- badges: start -->
+<!-- badges: end -->
+
+DimExp provides tools for experimental design sizing in agricultural
+research. It implements several methods for estimating the optimal
+plot size from uniformity trial data, and for estimating the optimal
+number of replications, with standardized diagnostic statistics and
+plots:
+
+- `fit_lrp()`: optimal plot size via the Linear Response Plateau model
+- `fit_qrp()`: optimal plot size via the Quadratic Response Plateau model
+- `fit_mcm()`: optimal plot size via the Modified Maximum Curvature
+  method (Meier & Lessmann, 1971)
+- `calc_paranaiba()`: optimal plot size via the Paranaiba method
+  (Paranaiba, Ferreira & Morais, 2009)
+- `calc_replicates()`: optimal number of replications (Cargnelutti
+  Filho et al., 2014)
+
+## Installation
+
+You can install the development version of DimExp from
+[GitHub](https://github.com/) with:
+
+``` r
+# install.packages("pak")
+pak::pak("lpradebon/DimExp")
+```
+
+## Example
+
+A basic uniformity-trial workflow: fit a Linear Response Plateau model
+to coefficient of variation data across plot sizes, and inspect the
+estimated optimal plot size.
+
+```{r example}
+library(DimExp)
+
+# Example uniformity trial data: CV (%) decreasing with plot size
+plot_size <- c(1, 2, 4, 6, 8, 10, 15, 20, 25, 30)
+cv        <- c(22.1, 18.4, 14.2, 11.8, 10.1, 9.3, 8.1, 7.6, 7.4, 7.3)
+
+fit <- fit_lrp(x = plot_size, cv = cv, plot_title = "Uniformity trial example")
+fit
+```
+
+```{r example-plot}
+plot(fit)
+```
+
+## Citation
+
+If you use DimExp in your research, please cite the underlying methods
+(see each function's documentation for the corresponding reference) as
+well as the package itself.
