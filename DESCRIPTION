@@ -11,27 +11,21 @@ Authors@R: c(
     ),
     person(
       "Leonardo", "Pradebon",
-      email = "author2@example.com",
+      email = "leonardopradebon@gmail.com",
       role = "aut",
       comment = c(ORCID = "0000-0001-7827-6312")
     ),
     person(
       "Ivan", "Carvalho",
-      email = "author3@example.com",
+      email = "carvalho.irc@gmail.com",
       role = "aut",
       comment = c(ORCID = "0000-0001-7947-4900")
     ),
     person(
-      "Author Four", "Surname",
-      email = "author4@example.com",
+      "Murilo", "Loro",
+      email = "muriloloro@gmail.com",
       role = "aut",
-      comment = c(ORCID = "0000-0000-0000-0004")
-    ),
-    person(
-      "Author Five", "Surname",
-      email = "author5@example.com",
-      role = "aut",
-      comment = c(ORCID = "0000-0000-0000-0005")
+      comment = c(ORCID = "0000-0003-0241-4226")
     )
   )
 Description: Provides functions to estimate optimal plot size for
