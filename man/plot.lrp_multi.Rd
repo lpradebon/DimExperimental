@@ -2,19 +2,40 @@
 % Please edit documentation in R/fit_lrp.R
 \name{plot.lrp_multi}
 \alias{plot.lrp_multi}
-\title{Plot LRP fits for several trials}
+\title{Plot LRP fits for several trials (paginated grid)}
 \usage{
-\method{plot}{lrp_multi}(x, ...)
+\method{plot}{lrp_multi}(
+  x,
+  save = FALSE,
+  file = NULL,
+  format = c("tiff", "png", "jpeg", "pdf", "eps"),
+  dpi = 300,
+  width = 18,
+  height = 24,
+  units = "cm",
+  compression = "lzw",
+  ...
+)
 }
 \arguments{
 \item{x}{an object of class \code{"lrp_multi"}.}
 
-\item{...}{further arguments passed to [plot.lrp_fit()].}
+\item{save}{logical; write the page(s) to disk (default FALSE).}
+
+\item{file}{base file name; page number and extension are appended when there
+is more than one page.}
+
+\item{format, dpi, width, height, units, compression}{passed to the saver.}
+
+\item{...}{styling arguments forwarded to [plot.lrp_fit()]
+(for example \code{decimal_mark}, \code{cond_word}, \code{label_size}).}
 }
 \value{
-A named list of \code{ggplot} objects, invisibly.
+A list of page objects, invisibly.
 }
 \description{
-Builds one article-style plot per trial. Combine them with a package such as
-\pkg{patchwork} or \pkg{ggpubr} for a multi-panel figure.
+Arranges the per-trial plots in a grid of at most 6 panels (3 rows by 2
+columns). With more than 6 trials the panels are paginated: each page is a
+separate 3x2 figure, and with \code{save = TRUE} each page is written to its
+own file. Requires the \pkg{patchwork} package.
 }

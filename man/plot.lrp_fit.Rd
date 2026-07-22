@@ -2,15 +2,36 @@
 % Please edit documentation in R/fit_lrp.R
 \name{plot.lrp_fit}
 \alias{plot.lrp_fit}
-\title{Plot an LRP fit (article style)}
+\title{Plot an LRP fit (publication style)}
 \usage{
 \method{plot}{lrp_fit}(
   x,
   title = "Linear Plateau",
   annotate_model = TRUE,
-  base_size = 14,
-  label_size = 4,
+  xlab = NULL,
+  ylab = "CV (\%)",
+  decimal_mark = c(".", ","),
+  cond_word = "if",
+  digits_coef = 3,
+  digits_stat = 2,
+  point_size = 2.3,
+  line_size = 0.8,
+  point_colour = "black",
+  line_colour = "black",
+  bp_colour = "red",
+  base_size = 13,
+  label_size = 4.6,
+  title_size = NULL,
   family = "serif",
+  theme = NULL,
+  save = FALSE,
+  file = NULL,
+  format = c("tiff", "png", "jpeg", "pdf", "eps"),
+  dpi = 300,
+  width = 18,
+  height = 12,
+  units = "cm",
+  compression = "lzw",
   ...
 )
 }
@@ -19,24 +40,57 @@
 
 \item{title}{plot title.}
 
-\item{annotate_model}{logical; if \code{TRUE} (default) the model equations
-and statistics are drawn on the panel.}
+\item{annotate_model}{logical; draw the model equations and statistics.}
 
-\item{base_size}{base font size passed to the theme. Increase it for large
-exports (for example, a high-resolution TIFF).}
+\item{xlab, ylab}{axis titles. \code{xlab = NULL} uses "Plot size (m^2)".}
 
-\item{label_size}{size of the annotation text.}
+\item{decimal_mark}{decimal separator for the annotations, "." or ",".}
+
+\item{cond_word}{conditional word in the equations (e.g. "if" or "se").}
+
+\item{digits_coef, digits_stat}{decimals for the coefficients (a, b) and for
+the statistics (Xo, CVxo, R2).}
+
+\item{point_size, line_size}{sizes of the points and the fitted line.}
+
+\item{point_colour, line_colour, bp_colour}{colours of the points, the fitted
+line and the breakpoint marker.}
+
+\item{base_size}{base font size for the theme; axis titles and text scale
+from it.}
+
+\item{label_size}{size of the annotation text (equations, Xo, CVxo).}
+
+\item{title_size}{size of the plot title. \code{NULL} uses \code{base_size}.}
 
 \item{family}{font family for the theme and annotations.}
+
+\item{theme}{optional \pkg{ggplot2} theme object used instead of the default
+\code{theme_classic(base_size)}; the axis-line, tick and centred-title
+tweaks are applied on top.}
+
+\item{save}{logical; if \code{TRUE}, write the figure to disk (default FALSE).}
+
+\item{file}{output file name; if \code{NULL}, derived from \code{title}.}
+
+\item{format}{one of "tiff", "png", "jpeg", "pdf", "eps". TIFF/PDF/EPS are
+preferred for journals; TIFF is written with LZW compression.}
+
+\item{dpi}{resolution for raster formats.}
+
+\item{width, height, units}{figure size.}
+
+\item{compression}{TIFF compression (default "lzw").}
 
 \item{...}{ignored.}
 }
 \value{
-A \code{ggplot} object.
+A \code{ggplot} object (invisibly when saved).
 }
 \description{
-Draws the observed points, the fitted broken line, the breakpoint marker and,
-optionally, the plateau-model annotations (equations, \eqn{R^2}, Xo, CVxo) in
-the layout commonly used in plot-size articles. Axis limits are taken from the
-data.
+Draws the observed points, the fitted broken line, dotted guides to the
+breakpoint and the plateau-model annotations, in the layout used in
+plot-size articles: the model block (equations and \eqn{R^2}) centred at the
+top and \code{Xo}/\code{CVxo} next to the breakpoint. Axis limits come from
+the data.
 }

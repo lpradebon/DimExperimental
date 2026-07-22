@@ -2,71 +2,60 @@
 % Please edit documentation in R/fit_qrp.R
 \name{fit_qrp}
 \alias{fit_qrp}
-\title{Fit a Quadratic Response Plateau (QRP) model for plot size optimization}
+\title{Fit the Quadratic Response Plateau (QRP) model by grid search}
 \usage{
 fit_qrp(
-  x,
-  cv,
-  plot_title = NULL,
-  start_b = -1,
-  start_c = 0.05,
-  base_size = 14,
-  font_family = "sans",
-  axis_expand_x = 0.05,
-  axis_expand_y = 0.05
+  .data = NULL,
+  x = NULL,
+  cv = NULL,
+  trial = NULL,
+  step = 0.001,
+  search_range = NULL
 )
 }
 \arguments{
-\item{x}{Numeric vector of plot sizes.}
+\item{.data}{optional data frame; when supplied, \code{x}/\code{cv}/\code{trial}
+are column names.}
 
-\item{cv}{Numeric vector of CV values (percent), same length as \code{x}.}
+\item{x, cv}{numeric vectors, or column names when \code{.data} is a data frame.}
 
-\item{plot_title}{Character string used as the plot title. Default \code{NULL}.}
+\item{trial}{optional column name identifying the trial.}
 
-\item{start_b, start_c}{Starting values for the \code{b} and \code{c}
-coefficients in \code{nlsLM}. Defaults \code{-1} and \code{0.05}, matching
-the original implementation. NOTE: unlike \code{a} (initialized from
-\code{max(cv)}), these are fixed constants, not derived from the data.
-Flag for review once tested on datasets with a different CV/plot-size
-scale, see Details.}
+\item{step}{grid step for the breakpoint search (default 0.001).}
 
-\item{base_size}{Base font size for the plot theme. Default \code{14}.}
-
-\item{font_family}{Font family for all plot text. Default \code{"sans"}.}
-
-\item{axis_expand_x, axis_expand_y}{Fractional margin added beyond the data
-range when building axis limits. Default \code{0.05} (5%) each.}
+\item{search_range}{optional \code{c(lower, upper)} restricting the breakpoint
+search; must fall within the data range.}
 }
 \value{
-An object of class \code{qrp_fit}, a list with:
-\describe{
-  \item{call}{The matched call.}
-  \item{model}{The fitted \code{nlsLM} object.}
-  \item{coefficients}{Coefficient table from \code{summary(model)}.}
-  \item{parameters}{Named vector: Breakpoint, Breakpoint_Response, R2,
-    R2_adj, RMSE, MAE, AIC, BIC, SSE, MSE.}
-  \item{data}{Original \code{x}/\code{cv} data as a data frame.}
-  \item{curve}{Fitted curve, 500 points, for plotting.}
-  \item{plot}{A ggplot2 object. Not printed automatically.}
-}
+A \code{"qrp_fit"} (single series) or \code{"qrp_multi"} (per trial).
 }
 \description{
-Fits a quadratic-plateau model to coefficient of variation (CV) values
-across a range of plot sizes, returning the breakpoint (optimal plot
-size), fit statistics, and a standardized ggplot2 visualization. Mirrors
-the structure of \code{fit_lrp()} for consistency within the package.
+Fits the quadratic-plateau (smooth broken-line) model
+\deqn{f(x) = a + b x + c x^2 \ \text{ if } x \le X_0, \qquad
+      f(x) = a - b^2/(4c) \ \text{ if } x > X_0,}
+with \eqn{X_0 = -b/(2c)}. The breakpoint is profiled over a grid: for each
+candidate \eqn{X_0} the model is linear in the plateau level and the
+curvature, so it is fit by least squares with no starting values, and the
+\eqn{X_0} minimizing the residual sum of squares is returned. This mirrors
+[fit_lrp()] and avoids the convergence problems of a direct nls fit.
 }
-\details{
-The fitting method is unchanged from the original script:
-\code{minpack.lm::nlsLM} with \code{start = list(a = max(cv), b = start_b,
-c = start_c)}. This was kept deliberately "as is" for this round of
-standardization, same approach used for \code{fit_lrp()}.
+\section{Two ways to call}{
+
+\describe{
+  \item{Vectors}{\code{fit_qrp(x, cv)} returns a \code{"qrp_fit"}.}
+  \item{Data frame}{\code{fit_qrp(.data, x = "x", cv = "cv", trial = "trial")};
+    with \code{trial}, one model per trial is fit and a \code{"qrp_multi"}
+    object is returned. Column names default to "x", "cv", "trial".}
 }
-\examples{
-\dontrun{
-fit <- fit_qrp(x = trial1$x, cv = trial1$cv, plot_title = "Trial 1")
-fit
-plot(fit)
 }
 
+\examples{
+X   <- c(1, 2, 2, 3, 3, 4, 6, 6, 6, 6, 9, 12, 12, 18, 18)
+CV1 <- c(30.40, 19.51, 23.72, 12.89, 21.32, 16.69, 6.71, 10.75,
+         17.58, 14.94, 11.93, 3.18, 8.63, 4.25, 11.41)
+fit <- fit_qrp(X, CV1)
+fit
+}
+\seealso{
+[fit_lrp()], [plot.qrp_fit()]
 }
