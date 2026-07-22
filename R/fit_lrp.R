@@ -310,69 +310,160 @@ summary.lrp_fit <- function(object, ...) {
   invisible(object)
 }
 
-#' Plot an LRP fit (article style)
+## Save helper (internal) ----------------------------------------------------
+.save_lrp <- function(g, file, base, format, dpi, width, height, units,
+                      compression) {
+  format <- match.arg(format, c("tiff", "png", "jpeg", "pdf", "eps"))
+  if (is.null(file)) {
+    slug <- gsub("[^A-Za-z0-9]+", "_", base)
+    slug <- gsub("^_|_$", "", slug)
+    if (!nzchar(slug)) slug <- "lrp_plot"
+    file <- paste0(slug, ".", format)
+  }
+  args <- list(filename = file, plot = g, dpi = dpi,
+               width = width, height = height, units = units)
+  if (format %in% c("tiff", "tif")) args$compression <- compression
+  do.call(ggplot2::ggsave, args)
+  message("Saved: ", file)
+  invisible(file)
+}
+
+## Article-style plot --------------------------------------------------------
+#' Plot an LRP fit (publication style)
 #'
-#' Draws the observed points, the fitted broken line, the breakpoint marker and,
-#' optionally, the plateau-model annotations (equations, \eqn{R^2}, Xo, CVxo) in
-#' the layout commonly used in plot-size articles. Axis limits are taken from the
-#' data.
+#' Draws the observed points, the fitted broken line, dotted guides to the
+#' breakpoint and the plateau-model annotations, in the layout used in
+#' plot-size articles: the model block (equations and \eqn{R^2}) centred at the
+#' top and \code{Xo}/\code{CVxo} next to the breakpoint. Axis limits come from
+#' the data.
 #'
 #' @param x an object of class \code{"lrp_fit"}.
 #' @param title plot title.
-#' @param annotate_model logical; if \code{TRUE} (default) the model equations
-#'   and statistics are drawn on the panel.
-#' @param base_size base font size passed to the theme. Increase it for large
-#'   exports (for example, a high-resolution TIFF).
-#' @param label_size size of the annotation text.
+#' @param annotate_model logical; draw the model equations and statistics.
+#' @param xlab,ylab axis titles. \code{xlab = NULL} uses "Plot size (m^2)".
+#' @param decimal_mark decimal separator for the annotations, "." or ",".
+#' @param cond_word conditional word in the equations (e.g. "if" or "se").
+#' @param digits_coef,digits_stat decimals for the coefficients (a, b) and for
+#'   the statistics (Xo, CVxo, R2).
+#' @param point_size,line_size sizes of the points and the fitted line.
+#' @param point_colour,line_colour,bp_colour colours of the points, the fitted
+#'   line and the breakpoint marker.
+#' @param base_size base font size for the theme; axis titles and text scale
+#'   from it.
+#' @param label_size size of the annotation text (equations, Xo, CVxo).
+#' @param title_size size of the plot title. \code{NULL} uses \code{base_size}.
 #' @param family font family for the theme and annotations.
+#' @param theme optional \pkg{ggplot2} theme object used instead of the default
+#'   \code{theme_classic(base_size)}; the axis-line, tick and centred-title
+#'   tweaks are applied on top.
+#' @param save logical; if \code{TRUE}, write the figure to disk (default FALSE).
+#' @param file output file name; if \code{NULL}, derived from \code{title}.
+#' @param format one of "tiff", "png", "jpeg", "pdf", "eps". TIFF/PDF/EPS are
+#'   preferred for journals; TIFF is written with LZW compression.
+#' @param dpi resolution for raster formats.
+#' @param width,height,units figure size.
+#' @param compression TIFF compression (default "lzw").
 #' @param ... ignored.
-#' @return A \code{ggplot} object.
+#' @return A \code{ggplot} object (invisibly when saved).
 #' @export
 plot.lrp_fit <- function(x, title = "Linear Plateau", annotate_model = TRUE,
-                         base_size = 14, label_size = 4, family = "serif", ...) {
-  fmt <- function(v) sprintf("%.2f", v)
-  d   <- x$data
-  a   <- unname(x$coefficients["a"]); b <- unname(x$coefficients["b"])
-  xo  <- unname(x$parameters["Breakpoint"])
-  p   <- unname(x$parameters["Breakpoint_Response"])
-  r2  <- unname(x$parameters["R2"])
+                         xlab = NULL, ylab = "CV (%)",
+                         decimal_mark = c(".", ","), cond_word = "if",
+                         digits_coef = 3, digits_stat = 2,
+                         point_size = 2.3, line_size = 0.8,
+                         point_colour = "black", line_colour = "black",
+                         bp_colour = "red",
+                         base_size = 13, label_size = 4.6, title_size = NULL,
+                         family = "serif", theme = NULL,
+                         save = FALSE, file = NULL,
+                         format = c("tiff", "png", "jpeg", "pdf", "eps"),
+                         dpi = 300, width = 18, height = 12, units = "cm",
+                         compression = "lzw", ...) {
 
-  xmax <- max(d$x) * 1.05
-  ymax <- max(d$cv) * 1.10
-  curve_x <- seq(0, max(d$x), length.out = 400)
-  curve   <- data.frame(x = curve_x, cv = predict(x, curve_x))
+  decimal_mark <- match.arg(decimal_mark)
+  format       <- match.arg(format)
+  if (is.null(title_size)) title_size <- base_size
 
-  g <- ggplot2::ggplot(d, ggplot2::aes(x, cv)) +
-    ggplot2::geom_point(size = 2.6) +
-    ggplot2::geom_line(data = curve, ggplot2::aes(x, cv), linewidth = 0.9) +
-    ggplot2::annotate("segment", x = 0, xend = xo, y = p, yend = p, linetype = 5) +
-    ggplot2::annotate("segment", x = xo, xend = xo, y = 0, yend = p, linetype = 5) +
-    ggplot2::annotate("point", x = xo, y = p, colour = "red", size = 3.2)
-
-  if (annotate_model) {
-    sgn <- ifelse(b < 0, "-", "+")
-    labs_txt <- c(
-      paste0("CV(x)==", fmt(a), sgn, fmt(abs(b)), "*X~~'if'~~X<=", fmt(xo)),
-      paste0("CV(x)==", fmt(p), "~~'if'~~X>", fmt(xo)),
-      paste0("R^2==", fmt(r2)),
-      paste0("Xo==", fmt(xo)),
-      paste0("CVxo==", fmt(p))
-    )
-    xt <- 0.55 * xmax
-    yt <- ymax * c(0.97, 0.88, 0.79, 0.70, 0.61)
-    for (i in seq_along(labs_txt))
-      g <- g + ggplot2::annotate("text", x = xt, y = yt[i], label = labs_txt[i],
-                                 parse = TRUE, hjust = 0.5, size = label_size,
-                                 family = family)
+  fmtn <- function(v, d) {
+    s <- formatC(v, format = "f", digits = d)
+    if (decimal_mark == ",") s <- gsub("\\.", ",", s)
+    s
   }
 
-  g +
+  d  <- x$data
+  a  <- unname(x$coefficients["a"]); b <- unname(x$coefficients["b"])
+  xo <- unname(x$parameters["Breakpoint"])
+  p  <- unname(x$parameters["Breakpoint_Response"])
+  r2 <- unname(x$parameters["R2"])
+
+  xmax <- max(d$x) * 1.05
+  ymax <- max(d$cv) * 1.12
+  curve <- data.frame(x = seq(0, max(d$x), length.out = 400))
+  curve$cv <- predict(x, curve$x)
+
+  if (is.null(xlab)) xlab <- expression("Plot size (" * m^2 * ")")
+
+  g <- ggplot2::ggplot(d, ggplot2::aes(x, cv)) +
+    ggplot2::annotate("segment", x = 0, xend = xo, y = p, yend = p,
+                      linetype = 3, linewidth = 0.5) +
+    ggplot2::annotate("segment", x = xo, xend = xo, y = 0, yend = p,
+                      linetype = 3, linewidth = 0.5) +
+    ggplot2::geom_line(data = curve, ggplot2::aes(x, cv),
+                       linewidth = line_size, colour = line_colour) +
+    ggplot2::geom_point(size = point_size, colour = point_colour) +
+    ggplot2::annotate("point", x = xo, y = p, colour = bp_colour,
+                      size = point_size * 1.3)
+
+  if (annotate_model) {
+    sgn  <- if (b < 0) "-" else "+"
+    a_s  <- fmtn(a, digits_coef);  b_s <- fmtn(abs(b), digits_coef)
+    xo_s <- fmtn(xo, digits_stat); p_s <- fmtn(p, digits_stat)
+    r2_s <- fmtn(r2, digits_stat)
+
+    eq1 <- paste0("CV[(x)]=='", a_s, "'", sgn, "'", b_s, "'*X~~'",
+                  cond_word, "'~~X<='", xo_s, "'")
+    eq2 <- paste0("CV[(x)]=='", p_s, "'~~'", cond_word, "'~~X>'", xo_s, "'")
+    eq3 <- paste0("R^2=='", r2_s, "'")
+    lXo <- paste0("X[o]=='", xo_s, "'")
+    lCV <- paste0("CV[Xo]=='", p_s, "'")
+
+    ## model block: centred, top
+    xm <- 0.55 * xmax
+    ym <- ymax * c(0.97, 0.89, 0.81)
+    for (i in seq_len(3))
+      g <- g + ggplot2::annotate("text", x = xm, y = ym[i],
+                                 label = c(eq1, eq2, eq3)[i], parse = TRUE,
+                                 hjust = 0.5, size = label_size, family = family)
+
+    ## breakpoint block: right of the vertical guide, below the plateau
+    xb <- xo + 0.03 * max(d$x)
+    yb <- c(max(p - 0.11 * ymax, 0.10 * ymax),
+            max(p - 0.20 * ymax, 0.02 * ymax))
+    for (i in 1:2)
+      g <- g + ggplot2::annotate("text", x = xb, y = yb[i],
+                                 label = c(lXo, lCV)[i], parse = TRUE,
+                                 hjust = 0, size = label_size, family = family)
+  }
+
+  g <- g +
     ggplot2::scale_x_continuous(limits = c(0, xmax), expand = c(0, 0)) +
     ggplot2::scale_y_continuous(limits = c(0, ymax), expand = c(0, 0)) +
-    ggplot2::labs(title = title,
-                  x = expression("Plot size (" * m^2 * ")"), y = "CV (%)") +
-    ggplot2::theme_classic(base_size = base_size, base_family = family) +
-    ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5))
+    ggplot2::labs(title = title, x = xlab, y = ylab) +
+    (if (is.null(theme))
+      ggplot2::theme_classic(base_size = base_size, base_family = family)
+     else theme) +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(hjust = 0.5, size = title_size),
+      axis.line  = ggplot2::element_line(colour = "black", linewidth = 0.6),
+      axis.ticks = ggplot2::element_line(colour = "black"),
+      axis.text  = ggplot2::element_text(colour = "black")
+    )
+
+  if (save) {
+    .save_lrp(g, file, title, format, dpi, width, height, units, compression)
+    return(invisible(g))
+  }
+  g
 }
 
 #' Print LRP fits for several trials
@@ -399,17 +490,50 @@ summary.lrp_multi <- function(object, ...) {
   invisible(object)
 }
 
-#' Plot LRP fits for several trials
+#' Plot LRP fits for several trials (paginated grid)
 #'
-#' Builds one article-style plot per trial. Combine them with a package such as
-#' \pkg{patchwork} or \pkg{ggpubr} for a multi-panel figure.
+#' Arranges the per-trial plots in a grid of at most 6 panels (3 rows by 2
+#' columns). With more than 6 trials the panels are paginated: each page is a
+#' separate 3x2 figure, and with \code{save = TRUE} each page is written to its
+#' own file. Requires the \pkg{patchwork} package.
 #'
 #' @param x an object of class \code{"lrp_multi"}.
-#' @param ... further arguments passed to [plot.lrp_fit()].
-#' @return A named list of \code{ggplot} objects, invisibly.
+#' @param save logical; write the page(s) to disk (default FALSE).
+#' @param file base file name; page number and extension are appended when there
+#'   is more than one page.
+#' @param format,dpi,width,height,units,compression passed to the saver.
+#' @param ... styling arguments forwarded to [plot.lrp_fit()]
+#'   (for example \code{decimal_mark}, \code{cond_word}, \code{label_size}).
+#' @return A list of page objects, invisibly.
 #' @export
-plot.lrp_multi <- function(x, ...) {
-  plots <- Map(function(f, nm) plot(f, title = as.character(nm), ...),
+plot.lrp_multi <- function(x, save = FALSE, file = NULL,
+                           format = c("tiff", "png", "jpeg", "pdf", "eps"),
+                           dpi = 300, width = 18, height = 24, units = "cm",
+                           compression = "lzw", ...) {
+  if (!requireNamespace("patchwork", quietly = TRUE))
+    stop("Package 'patchwork' is required to arrange multiple trials. ",
+         "Install it with install.packages('patchwork').", call. = FALSE)
+  format <- match.arg(format)
+
+  plots <- Map(function(f, nm) plot(f, title = as.character(nm), save = FALSE, ...),
                x$fits, names(x$fits))
-  invisible(plots)
+
+  idx    <- seq_along(plots)
+  chunks <- split(idx, ceiling(idx / 6))
+  pages  <- lapply(chunks, function(ix)
+    patchwork::wrap_plots(plots[ix], nrow = 3, ncol = 2))
+
+  if (save) {
+    base <- if (is.null(file)) "lrp_trials" else sub("\\.[^.]*$", "", file)
+    n <- length(pages)
+    for (i in seq_len(n)) {
+      fn <- if (n == 1) paste0(base, ".", format)
+      else sprintf("%s_p%d.%s", base, i, format)
+      .save_lrp(pages[[i]], fn, base, format, dpi, width, height, units,
+                compression)
+    }
+  } else {
+    for (pg in pages) print(pg)
+  }
+  invisible(pages)
 }
