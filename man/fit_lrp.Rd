@@ -2,72 +2,106 @@
 % Please edit documentation in R/fit_lrp.R
 \name{fit_lrp}
 \alias{fit_lrp}
-\title{Fit a Linear Response Plateau (LRP) model for plot size optimization}
+\title{Fit the Linear Response Plateau (LRP) model by grid search}
 \usage{
 fit_lrp(
-  x,
-  cv,
-  plot_title = NULL,
-  init_threshold = 6,
-  base_size = 14,
-  font_family = "sans",
-  axis_expand_x = 0.05,
-  axis_expand_y = 0.05
+  .data = NULL,
+  x = NULL,
+  cv = NULL,
+  trial = NULL,
+  step = 0.001,
+  method = c("segment", "ramp"),
+  search_range = NULL
 )
 }
 \arguments{
-\item{x}{Numeric vector of plot sizes.}
+\item{.data}{optional data frame. When supplied, \code{x}, \code{cv} and
+\code{trial} are interpreted as column names (character strings). When
+\code{NULL} (default) the vector interface is used.}
 
-\item{cv}{Numeric vector of CV values (percent), same length as \code{x}.}
+\item{x, cv}{either numeric vectors (vector interface) or, when \code{.data}
+is a data frame, the names of the predictor and response columns.}
 
-\item{plot_title}{Character string used as the plot title. Default \code{NULL}.}
+\item{trial}{optional name of the column identifying the trial. When given,
+one model is fit per trial.}
 
-\item{init_threshold}{Numeric. Subsets \code{x <= init_threshold} to build the
-linear starting values for \code{nls}. Default \code{6}, matching the
-original implementation. NOTE: this threshold is dataset-specific
-(calibrated on the soybean trials). Flag for review once tested on
-other datasets, see Details.}
+\item{step}{grid step for the breakpoint search. Default \code{0.001}; larger
+values run faster with a slightly coarser breakpoint.}
 
-\item{base_size}{Base font size for the plot theme. Default \code{14}.}
+\item{method}{how the linear coefficients are estimated at each candidate
+breakpoint. \code{"segment"} (default) uses only observations with
+\code{x <= X0}, reproducing the Paranaiba et al. (2009) procedure.
+\code{"ramp"} uses all observations on the basis \code{pmin(x, X0)}, the
+standard least-squares LRP.}
 
-\item{font_family}{Font family for all plot text. Default \code{"sans"}.}
-
-\item{axis_expand_x, axis_expand_y}{Fractional margin added beyond the data
-range when building axis limits. Default \code{0.05} (5%) each.}
+\item{search_range}{optional numeric \code{c(lower, upper)} restricting the
+interval (in units of \code{x}) where the breakpoint is searched. Must fall
+within the data range. Useful when the optimum is known to lie in a region
+and an outlier could otherwise pull the breakpoint outside it. \code{NULL}
+(default) searches the full feasible interval.}
 }
 \value{
-An object of class \code{lrp_fit}, a list with:
-\describe{
-  \item{call}{The matched call.}
-  \item{model}{The fitted \code{nls} object.}
-  \item{coefficients}{Coefficient table from \code{summary(model)}.}
-  \item{parameters}{Named vector: Breakpoint, Breakpoint_Response, AIC, BIC, R2, RMSE.}
-  \item{data}{Original \code{x}/\code{cv} data as a data frame.}
-  \item{curve}{Fitted curve, 500 points, for plotting.}
-  \item{plot}{A ggplot2 object. Not printed automatically.}
-}
+For a single series, an object of class \code{"lrp_fit"}: a list with
+\code{coefficients} (a, b); \code{parameters} (Breakpoint, Breakpoint_Response,
+R2, RMSE, AIC, BIC); \code{fitted}; \code{residuals}; \code{data};
+\code{method}; \code{step}. \cr
+With \code{trial}, an object of class \code{"lrp_multi"}: a list with
+\code{summary} (one row per trial), \code{fits} (the individual
+\code{"lrp_fit"} objects) and \code{method}.
 }
 \description{
-Fits a linear-plateau model to coefficient of variation (CV) values across
-a range of plot sizes, returning the breakpoint (optimal plot size), fit
-statistics, and a standardized ggplot2 visualization.
+Fits the linear-plateau (broken-line) model
+\deqn{f(x) = a + b\,x \ \text{ if } x \le X_0, \qquad
+      f(x) = a + b\,X_0 \ \text{ if } x > X_0}
+by profiling the breakpoint \eqn{X_0} over a fine grid. For each candidate
+breakpoint the linear coefficients are obtained by least squares and the
+plateau is set to \eqn{a + b\,X_0}; the breakpoint minimizing the residual
+sum of squares over all observations is returned. Profiling the breakpoint
+avoids the starting-value sensitivity and local-minima of a direct
+\code{\link[stats]{nls}} fit, so no initial values are required.
 }
 \details{
-The fitting method is unchanged from the original script: a single
-\code{nls} call initialized from a linear regression on the low-\code{x}
-subset. This was kept deliberately "as is" for this round of
-standardization. Known risk: \code{init_threshold = 6} was calibrated for
-plot sizes in the soybean trials range; for datasets with a different
-scale (e.g. plot sizes measured in different units, or a much narrower/
-wider range), this default may produce a poor starting value or too few
-points in the subset. This is exactly what the validation round across
-datasets should reveal.
+The response is typically the coefficient of variation (CV, percent) and the
+predictor the plot size. Supply the individual CV values (one per basic-unit
+form), not the means per plot size; repeated \code{x} values are expected.
 }
-\examples{
-\dontrun{
-fit <- fit_lrp(x = trial1$x, cv = trial1$cv, plot_title = "Trial 1")
-fit
-plot(fit)
+\section{Two ways to call}{
+
+\describe{
+  \item{Vectors}{\code{fit_lrp(x, cv)} fits a single series and returns an
+    \code{"lrp_fit"}.}
+  \item{Data frame}{\code{fit_lrp(.data, x = "x", cv = "cv", trial = "trial")}
+    takes a data frame plus column names. With \code{trial}, one model is fit
+    per trial and an \code{"lrp_multi"} object (summary table plus the
+    individual fits) is returned. Column names default to \code{"x"},
+    \code{"cv"} and \code{"trial"}; missing columns raise a clear error.}
+}
 }
 
+\examples{
+X   <- c(1, 2, 2, 3, 3, 4, 6, 6, 6, 6, 9, 12, 12, 18, 18)
+CV1 <- c(30.40, 19.51, 23.72, 12.89, 21.32, 16.69, 6.71, 10.75,
+         17.58, 14.94, 11.93, 3.18, 8.63, 4.25, 11.41)
+
+## Vector interface (single series)
+fit <- fit_lrp(X, CV1)
+fit
+
+## Data-frame interface with one model per trial
+df <- rbind(
+  data.frame(x = X, cv = CV1, trial = "T1"),
+  data.frame(x = X, cv = CV1 * 1.1, trial = "T2")
+)
+res <- fit_lrp(df, x = "x", cv = "cv", trial = "trial")
+res$summary
+
+}
+\references{
+Paranaiba, P. F., Ferreira, D. F. & Morais, A. R. (2009). Tamanho otimo de
+parcelas experimentais: proposicao de metodos de estimacao.
+\emph{Revista Brasileira de Biometria}, 27(2), 255-268. \cr
+Cargnelutti Filho, A. et al. (2025). \emph{Revista Vivencias}, 21(43), 499-513.
+}
+\seealso{
+[plot.lrp_fit()], [predict.lrp_fit()]
 }

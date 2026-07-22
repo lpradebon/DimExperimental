@@ -38,7 +38,7 @@ plots:
 ## Installation
 
 You can install the development version of DimExp from
-[GitHub](https://github.com/) with:
+[GitHub](https://github.com/lpradebon/DimExp) with:
 
 ``` r
 # install.packages("pak")
@@ -49,7 +49,8 @@ pak::pak("lpradebon/DimExp")
 
 A basic uniformity-trial workflow: fit a Linear Response Plateau model
 to coefficient of variation data across plot sizes, and inspect the
-estimated optimal plot size.
+estimated optimal plot size. The breakpoint is found by a grid search,
+so no starting values are needed.
 
 ```{r example}
 library(DimExp)
@@ -58,13 +59,36 @@ library(DimExp)
 plot_size <- c(1, 2, 4, 6, 8, 10, 15, 20, 25, 30)
 cv        <- c(22.1, 18.4, 14.2, 11.8, 10.1, 9.3, 8.1, 7.6, 7.4, 7.3)
 
-fit <- fit_lrp(x = plot_size, cv = cv, plot_title = "Uniformity trial example")
+fit <- fit_lrp(x = plot_size, cv = cv)
 fit
 ```
 
+The plot title (and other options) go on the `plot()` method, which
+draws the fitted broken line, the breakpoint, and the plateau-model
+annotations in the layout commonly used in plot-size articles:
+
 ```{r example-plot}
-plot(fit)
+plot(fit, title = "Uniformity trial example")
 ```
+
+### Several trials at once
+
+Pass a data frame and the column names to fit one model per trial. The
+result carries a per-trial summary table plus the individual fits:
+
+```{r example-trials}
+trials <- rbind(
+  data.frame(plot_size, cv, trial = "Trial A"),
+  data.frame(plot_size, cv = cv + 1.5, trial = "Trial B")
+)
+
+res <- fit_lrp(trials, x = "plot_size", cv = "cv", trial = "trial")
+res$summary
+```
+
+If the optimum is known to lie in a given region, restrict the
+breakpoint search with `search_range`, for example
+`fit_lrp(x = plot_size, cv = cv, search_range = c(5, 20))`.
 
 ## Citation
 
