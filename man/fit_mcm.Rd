@@ -5,92 +5,84 @@
 \title{Fit the Modified Maximum Curvature (MCM) plot-size model}
 \usage{
 fit_mcm(
-  x,
-  cv,
-  plot_title = "Meier & Lessmann (1971)",
-  df_correction = FALSE,
-  base_size = 14,
-  font_family = "sans",
-  axis_expand_x = 0.05,
-  axis_expand_y = 0.05
+  .data = NULL,
+  x = NULL,
+  cv = NULL,
+  df = NULL,
+  trial = NULL,
+  method = c("nls", "loglinear")
 )
 }
 \arguments{
-\item{x}{Numeric vector. Grouped basic experimental unit sizes (Xo),
-obtained from uniformity trials.}
+\item{.data}{optional data frame; when supplied the other arguments are
+column names.}
 
-\item{cv}{Numeric vector. Coefficient of variation of the grouped plots
-(%), same length as \code{x}.}
+\item{x, cv}{numeric vectors (plot size and CV in percent), or column names.}
 
-\item{plot_title}{Character string used as the plot title. Default
-\code{"Meier & Lessmann (1971)"}.}
+\item{df}{optional degrees of freedom per point for the Federer (1955)
+weighting, as a vector or a column name. \code{NULL} = unweighted.}
 
-\item{df_correction}{Logical. If \code{TRUE}, applies a degrees-of-freedom
-correction to the breakpoint estimate (some authors apply this
-correction, others do not). Default \code{FALSE}, which reproduces the
-original uncorrected Meier & Lessmann formula. See Details: the
-correction itself is not yet implemented, only the insertion point is
-marked in the source.}
+\item{trial}{optional column name identifying the trial.}
 
-\item{base_size}{Base font size for the plot theme. Default \code{14}.}
-
-\item{font_family}{Font family for all plot text. Default \code{"sans"}.}
-
-\item{axis_expand_x, axis_expand_y}{Fractional margin added beyond the data
-range when building axis limits. Default \code{0.05} (5%) each.}
+\item{method}{estimation method: \code{"nls"} (default, original scale;
+reproduces the chickpea article) or \code{"loglinear"} (Meier & Lessman
+regression).}
 }
 \value{
-An object of class \code{mcm_fit}, a list with:
-\describe{
-  \item{call}{The matched call.}
-  \item{model}{The fitted \code{nls} object.}
-  \item{coefficients}{Coefficient table from \code{summary(model)}.}
-  \item{parameters}{Named vector: Breakpoint, Breakpoint_Response, R2.}
-  \item{data}{Original \code{x}/\code{cv} data as a data frame.}
-  \item{curve}{Fitted curve, 500 points, for plotting.}
-  \item{plot}{A ggplot2 object. Not printed automatically.}
-}
+An \code{"mcm_fit"} (single series) or \code{"mcm_multi"} (per trial).
 }
 \description{
-Estimates the optimal plot size using the Modified Maximum Curvature
-method proposed by Meier & Lessmann (1971), from a set of grouped basic
-experimental units (\code{x}) and their corresponding coefficients of
-variation (\code{cv}), obtained from uniformity trials.
-
-The method identifies the point beyond which increasing the plot size
-yields negligible gains in experimental precision, and is widely used in
-experimental sizing studies.
+Estimates the optimal plot size by the modified maximum curvature method of
+Meier & Lessman (1971). The relationship \eqn{CV = a\,X^{-b}} is fit by linear
+regression of \eqn{\log CV} on \eqn{\log X}, and the optimum is the point of
+maximum curvature
+\deqn{X_c = \left[ a^2 b^2 (2b + 1) / (b + 2) \right]^{1/(2b + 2)}.}
 }
-\details{
-The fitting method is unchanged from the original implementation: initial
-values from a log-log linear regression, followed by a single \code{nls}
-call on \code{cv ~ a * x^(-b)}.
+\section{Estimation method}{
 
-\strong{Degrees-of-freedom correction}: when \code{df_correction = TRUE},
-the function currently still returns the uncorrected breakpoint. The
-insertion point for the correction is marked with a \code{TODO} comment
-in the source, inside \code{fit_mcm()}, right after the uncorrected
-\code{breakpoint} is computed.
+\code{method = "nls"} (default) fits \eqn{CV = a X^{-b}} by nonlinear least
+squares on the original scale (seeded from the log-log fit), reproducing
+Cargnelutti Filho et al. (2025) and the modern Brazilian plot-size papers.
+\code{method = "loglinear"} fits the line \eqn{\log CV = \log a - b \log X}
+(the classic Meier & Lessman route). If \code{"nls"} fails to converge it
+falls back to the log-linear estimate with a warning.
 }
+
+\section{Degrees-of-freedom correction}{
+
+Pass \code{df}, the degrees of freedom of each point, to weight the fit as
+proposed by Federer (1955); this down-weights the CV of larger plot sizes,
+estimated from fewer plots. Some authors apply it, others do not;
+\code{df = NULL} (default) is unweighted. The cost-factor modification
+(K1, K2) of the classic method is not applied; \eqn{X_c} is in the units of
+\code{x}.
+}
+
+\section{Two ways to call}{
+
+\describe{
+  \item{Vectors}{\code{fit_mcm(x, cv, df = NULL)} returns an \code{"mcm_fit"}.}
+  \item{Data frame}{\code{fit_mcm(.data, x = "x", cv = "cv", df = "df",
+    trial = "trial")}; with \code{trial}, one model per trial is fit and an
+    \code{"mcm_multi"} object is returned.}
+}
+}
+
 \examples{
-\dontrun{
-grouped_data <- data.frame(
+grouped <- data.frame(
   x  = c(1, 2, 4, 8, 2, 4, 8, 16, 3, 6, 12, 24, 6, 12, 24),
-  cv = c(19.55309038, 15.23512639, 10.0533745, 8.203086387,
-         14.021032, 12.02564594, 7.707005924, 7.207523603,
-         11.51373415, 9.876254603, 11.59399511, 6.690432438,
-         7.504701872, 5.791576016, 3.084453732)
+  cv = c(19.55, 15.24, 10.05, 8.20, 14.02, 12.03, 7.71, 7.21,
+         11.51, 9.88, 11.59, 6.69, 7.50, 5.79, 3.08)
 )
-
-# NOTE: the model needs the full set of grouped points, not their means.
-fit <- fit_mcm(x = grouped_data$x, cv = grouped_data$cv)
+fit <- fit_mcm(grouped$x, grouped$cv)
 fit
-plot(fit)
-}
-
 }
 \references{
-Meier, V. D.; Lessman, K. J. (1971). Estimation of optimum field plot
-shape and size for testing yield in Crambe abyssinica hochst. Crop
-Science, v. 11, p. 648-650.
+Meier, V. D. & Lessman, K. J. (1971). Estimation of optimum field plot shape
+and size for testing yield in \emph{Crambe abyssinica} Hochst.
+\emph{Crop Science}, 11, 648-650. \cr
+Federer, W. T. (1955). \emph{Experimental Design}. Macmillan, New York.
+}
+\seealso{
+[fit_lrp()], [fit_qrp()], [plot.mcm_fit()]
 }

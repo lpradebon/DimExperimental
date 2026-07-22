@@ -1,237 +1,404 @@
-#' Fit the Modified Maximum Curvature (MCM) plot-size model
-#'
-#' @description
-#' Estimates the optimal plot size using the Modified Maximum Curvature
-#' method proposed by Meier & Lessmann (1971), from a set of grouped basic
-#' experimental units (\code{x}) and their corresponding coefficients of
-#' variation (\code{cv}), obtained from uniformity trials.
-#'
-#' The method identifies the point beyond which increasing the plot size
-#' yields negligible gains in experimental precision, and is widely used in
-#' experimental sizing studies.
-#'
-#' @param x Numeric vector. Grouped basic experimental unit sizes (Xo),
-#'   obtained from uniformity trials.
-#' @param cv Numeric vector. Coefficient of variation of the grouped plots
-#'   (%), same length as \code{x}.
-#' @param plot_title Character string used as the plot title. Default
-#'   \code{"Meier & Lessmann (1971)"}.
-#' @param df_correction Logical. If \code{TRUE}, applies a degrees-of-freedom
-#'   correction to the breakpoint estimate (some authors apply this
-#'   correction, others do not). Default \code{FALSE}, which reproduces the
-#'   original uncorrected Meier & Lessmann formula. See Details: the
-#'   correction itself is not yet implemented, only the insertion point is
-#'   marked in the source.
-#' @param base_size Base font size for the plot theme. Default \code{14}.
-#' @param font_family Font family for all plot text. Default \code{"sans"}.
-#' @param axis_expand_x,axis_expand_y Fractional margin added beyond the data
-#'   range when building axis limits. Default \code{0.05} (5%) each.
-#'
-#' @details
-#' The fitting method is unchanged from the original implementation: initial
-#' values from a log-log linear regression, followed by a single \code{nls}
-#' call on \code{cv ~ a * x^(-b)}.
-#'
-#' \strong{Degrees-of-freedom correction}: when \code{df_correction = TRUE},
-#' the function currently still returns the uncorrected breakpoint. The
-#' insertion point for the correction is marked with a \code{TODO} comment
-#' in the source, inside \code{fit_mcm()}, right after the uncorrected
-#' \code{breakpoint} is computed.
-#'
-#' @references
-#' Meier, V. D.; Lessman, K. J. (1971). Estimation of optimum field plot
-#' shape and size for testing yield in Crambe abyssinica hochst. Crop
-#' Science, v. 11, p. 648-650.
-#'
-#' @return An object of class \code{mcm_fit}, a list with:
-#' \describe{
-#'   \item{call}{The matched call.}
-#'   \item{model}{The fitted \code{nls} object.}
-#'   \item{coefficients}{Coefficient table from \code{summary(model)}.}
-#'   \item{parameters}{Named vector: Breakpoint, Breakpoint_Response, R2.}
-#'   \item{data}{Original \code{x}/\code{cv} data as a data frame.}
-#'   \item{curve}{Fitted curve, 500 points, for plotting.}
-#'   \item{plot}{A ggplot2 object. Not printed automatically.}
-#' }
-#'
-#' @examples
-#' \dontrun{
-#' grouped_data <- data.frame(
-#'   x  = c(1, 2, 4, 8, 2, 4, 8, 16, 3, 6, 12, 24, 6, 12, 24),
-#'   cv = c(19.55309038, 15.23512639, 10.0533745, 8.203086387,
-#'          14.021032, 12.02564594, 7.707005924, 7.207523603,
-#'          11.51373415, 9.876254603, 11.59399511, 6.690432438,
-#'          7.504701872, 5.791576016, 3.084453732)
-#' )
-#'
-#' # NOTE: the model needs the full set of grouped points, not their means.
-#' fit <- fit_mcm(x = grouped_data$x, cv = grouped_data$cv)
-#' fit
-#' plot(fit)
-#' }
-#'
-#' @export
-fit_mcm <- function(x, cv,
-                    plot_title = "Meier & Lessmann (1971)",
-                    df_correction = FALSE,
-                    base_size = 14,
-                    font_family = "sans",
-                    axis_expand_x = 0.05,
-                    axis_expand_y = 0.05) {
+## ============================================================================
+## DimExp :: Modified Maximum Curvature (MCM) plot-size model
+## ----------------------------------------------------------------------------
+## Meier & Lessman (1971), after Lessman & Atkins (1963). The CV vs plot-size
+## relationship CV = a * X^(-b) is fit and the optimum plot size is the point of
+## maximum curvature of that curve:
+##   Xc = [ a^2 b^2 (2b + 1) / (b + 2) ] ^ ( 1 / (2b + 2) ).
+##
+## Estimation (method):
+##   "nls"       nonlinear least squares of CV = a X^(-b) on the original scale,
+##               seeded from the log-log fit. Reproduces Cargnelutti Filho et al.
+##               (2025) and the modern Brazilian plot-size papers. DEFAULT.
+##   "loglinear" linear regression of log(CV) on log(X) (the classic Meier &
+##               Lessman route). Pass `df` for the Federer (1955) weighting.
+## Degrees-of-freedom correction (Federer, 1955): pass `df`, the degrees of
+## freedom per point, to weight the fit. Some authors apply it, others do not;
+## `df = NULL` (default) is the unweighted fit.
+##
+## The cost-factor modification (K1, K2) of the classic method is NOT applied
+## here; Xc is reported in the units of `x` (basic units in the original method).
+## Uses the shared internal saver .save_lrp() defined in fit_lrp.R.
+## ============================================================================
 
-  call <- match.call()
+## Internal single-series engine ---------------------------------------------
+.mcm_fit_one <- function(x, cv, method = "nls", df = NULL) {
 
-  # ---- Input validation ----
-  if (length(x) != length(cv)) {
+  if (!is.numeric(x) || !is.numeric(cv))
+    stop("`x` and `cv` must be numeric.", call. = FALSE)
+  if (length(x) != length(cv))
     stop("`x` and `cv` must have the same length.", call. = FALSE)
-  }
-  if (any(x <= 0) || any(cv <= 0)) {
+  if (anyNA(x) || anyNA(cv))
+    stop("`x` and `cv` cannot contain missing values (NA).", call. = FALSE)
+  if (any(x <= 0) || any(cv <= 0))
     stop("`x` and `cv` must be strictly positive.", call. = FALSE)
-  }
-  if (length(x) < 3) {
-    stop("At least 3 points are required to fit a 2-parameter model with residual degrees of freedom.",
-         call. = FALSE)
-  }
-
-  # ---- Initial values (log-log linear regression, unchanged) ----
-  ini <- lm(log(cv) ~ log(x))
-  a_ini <- exp(coef(ini)[1])
-  b_ini <- -coef(ini)[2]
-
-  # ---- Model fitting (unchanged: single nls call) ----
-  fit <- tryCatch(
-    nls(cv ~ a * x^(-b), start = list(a = a_ini, b = b_ini)),
-    error = function(e) e
-  )
-
-  if (inherits(fit, "error")) {
-    stop(sprintf(
-      "Model did not converge. Initial values used: a = %.3f, b = %.3f. Original error: %s",
-      a_ini, b_ini, conditionMessage(fit)
-    ), call. = FALSE)
+  if (length(x) < 3 || length(unique(x)) < 3)
+    stop("At least 3 distinct `x` values are required.", call. = FALSE)
+  if (!is.null(df)) {
+    if (!is.numeric(df) || length(df) != length(x) || anyNA(df) || any(df <= 0))
+      stop("`df` must be a positive numeric vector matching `x` in length.",
+           call. = FALSE)
   }
 
-  coefs <- coef(fit)
-  a <- coefs["a"]; b <- coefs["b"]
+  ## log-log fit (also the starting values for nls)
+  ll <- if (is.null(df)) stats::lm(log(cv) ~ log(x))
+  else             stats::lm(log(cv) ~ log(x), weights = df)
+  a0 <- unname(exp(stats::coef(ll)[1]))
+  b0 <- unname(-stats::coef(ll)[2])
+  used <- method
 
-  # ---- Modified Maximum Curvature (uncorrected, original formula) ----
-  breakpoint <- ((a^2 * b^2 * (2 * b + 1)) / (b + 2))^(1 / (2 * b + 2))
-
-  # ---- Optional degrees-of-freedom correction ----
-  # Some authors apply a correction to the breakpoint above based on the
-  # error degrees of freedom of the uniformity trial; others use the
-  # uncorrected Meier & Lessmann formula as-is (the default here).
-  #
-  # TODO (Willyan): implement the df correction below when
-  # `df_correction = TRUE`. Replace `breakpoint` (and, if the correction
-  # also affects it, `breakpoint_response` further down) with the
-  # corrected formula.
-  if (isTRUE(df_correction)) {
-    # Placeholder: no correction implemented yet, `breakpoint` unchanged.
+  if (method == "loglinear") {
+    a <- a0; b <- b0
+  } else {                                   # method == "nls"
+    nlsfit <- tryCatch(
+      if (is.null(df))
+        stats::nls(cv ~ a * x^(-b), start = list(a = a0, b = b0))
+      else
+        stats::nls(cv ~ a * x^(-b), start = list(a = a0, b = b0), weights = df),
+      error = function(e) NULL)
+    if (is.null(nlsfit)) {
+      warning("nls did not converge; using the log-linear estimate instead.",
+              call. = FALSE)
+      a <- a0; b <- b0; used <- "loglinear (nls fallback)"
+    } else {
+      cf <- stats::coef(nlsfit); a <- unname(cf["a"]); b <- unname(cf["b"])
+    }
   }
 
+  if (b <= 0)
+    warning("Estimated exponent b <= 0; CV does not decrease with plot size, ",
+            "so the maximum-curvature point is not meaningful.", call. = FALSE)
+
+  ## point of maximum curvature (in the units of x)
+  breakpoint          <- ((a^2 * b^2 * (2 * b + 1)) / (b + 2))^(1 / (2 * b + 2))
   breakpoint_response <- a * breakpoint^(-b)
 
-  # ---- Goodness of fit ----
-  pred <- predict(fit)
-  r2 <- 1 - sum((cv - pred)^2) / sum((cv - mean(cv))^2)
+  pred      <- a * x^(-b)
+  residuals <- cv - pred
+  r2   <- 1 - sum(residuals^2) / sum((cv - mean(cv))^2)
+  rmse <- sqrt(mean(residuals^2))
 
-  # ---- Fitted curve (for plotting) ----
-  curve_data <- data.frame(x = seq(min(x), max(x), length.out = 500))
-  curve_data$cv <- a * curve_data$x^(-b)
-
-  obs_data <- data.frame(x = x, cv = cv)
-
-  # ---- Dynamic axis limits ----
-  x_range <- range(c(x, breakpoint))
-  y_range <- range(c(cv, breakpoint_response, curve_data$cv))
-  x_margin <- diff(x_range) * axis_expand_x
-  y_margin <- diff(y_range) * axis_expand_y
-
-  xlim <- c(max(0, x_range[1] - x_margin), x_range[2] + x_margin)
-  ylim <- c(max(0, y_range[1] - y_margin), y_range[2] + y_margin)
-
-  # ---- Formatted equation for annotation ----
-  fmt <- function(v) sprintf("%.2f", v)
-  eq1 <- paste0("CV(x) == '", fmt(a), "'*X^{-'", fmt(b), "'}")
-  eq2 <- paste0("R^2 == '", fmt(r2), "'")
-  label_breakpoint <- paste0("Xo == '", fmt(breakpoint), "'")
-  label_response <- paste0("CVxo == '", fmt(breakpoint_response), "'")
-
-  x_eq <- mean(xlim)
-  y_eqs <- ylim[2] - diff(ylim) * c(0.05, 0.16, 0.27, 0.38)
-
-  # ---- Plot ----
-  g <- ggplot2::ggplot(obs_data, ggplot2::aes(x, cv)) +
-    ggplot2::geom_point(size = 3, colour = "darkgreen") +
-    ggplot2::geom_line(data = curve_data, ggplot2::aes(x, cv), linewidth = 1, colour = "blue") +
-    ggplot2::geom_segment(ggplot2::aes(x = 0, xend = breakpoint,
-                                       y = breakpoint_response, yend = breakpoint_response),
-                          linetype = 2, colour = "red") +
-    ggplot2::geom_segment(ggplot2::aes(x = breakpoint, xend = breakpoint,
-                                       y = 0, yend = breakpoint_response),
-                          linetype = 2, colour = "red") +
-    ggplot2::geom_point(ggplot2::aes(x = breakpoint, y = breakpoint_response),
-                        colour = "red", size = 3) +
-    ggplot2::annotate("text", x = x_eq, y = y_eqs[1], label = eq1,
-                      parse = TRUE, hjust = 0.5, family = font_family, size = base_size / 3.5) +
-    ggplot2::annotate("text", x = x_eq, y = y_eqs[2], label = eq2,
-                      parse = TRUE, hjust = 0.5, family = font_family, size = base_size / 3.5) +
-    ggplot2::annotate("text", x = x_eq, y = y_eqs[3], label = label_breakpoint,
-                      parse = TRUE, hjust = 0.5, family = font_family, size = base_size / 3.5) +
-    ggplot2::annotate("text", x = x_eq, y = y_eqs[4], label = label_response,
-                      parse = TRUE, hjust = 0.5, family = font_family, size = base_size / 3.5) +
-    ggplot2::scale_x_continuous(limits = xlim, expand = c(0, 0)) +
-    ggplot2::scale_y_continuous(limits = ylim, expand = c(0, 0)) +
-    ggplot2::labs(title = plot_title,
-                  x = expression("Plot size (" * m^2 * ")"),
-                  y = "CV (%)") +
-    ggplot2::theme_classic(base_size = base_size, base_family = font_family) +
-    ggplot2::theme(
-      plot.title = ggplot2::element_text(hjust = 0.5),
-      axis.title = ggplot2::element_text(colour = "black"),
-      axis.text = ggplot2::element_text(colour = "black")
-    )
-
-  # ---- Structured output (harmonized with fit_lrp / fit_qrp) ----
-  result <- list(
-    call = call,
-    model = fit,
-    coefficients = summary(fit)$coefficients,
-    parameters = c(
-      Breakpoint = unname(breakpoint),
-      Breakpoint_Response = unname(breakpoint_response),
-      R2 = r2
+  structure(
+    list(
+      coefficients = c(a = a, b = b),
+      parameters   = c(Breakpoint = breakpoint,
+                       Breakpoint_Response = breakpoint_response,
+                       R2 = r2, RMSE = rmse),
+      fitted = pred, residuals = residuals,
+      data = data.frame(x = x, cv = cv),
+      method = used, weighted = !is.null(df)
     ),
-    data = obs_data,
-    curve = curve_data,
-    plot = g
+    class = "mcm_fit"
   )
+}
 
-  class(result) <- "mcm_fit"
-  result
+## Public fitter --------------------------------------------------------------
+#' Fit the Modified Maximum Curvature (MCM) plot-size model
+#'
+#' Estimates the optimal plot size by the modified maximum curvature method of
+#' Meier & Lessman (1971). The relationship \eqn{CV = a\,X^{-b}} is fit by linear
+#' regression of \eqn{\log CV} on \eqn{\log X}, and the optimum is the point of
+#' maximum curvature
+#' \deqn{X_c = \left[ a^2 b^2 (2b + 1) / (b + 2) \right]^{1/(2b + 2)}.}
+#'
+#' @section Estimation method:
+#' \code{method = "nls"} (default) fits \eqn{CV = a X^{-b}} by nonlinear least
+#' squares on the original scale (seeded from the log-log fit), reproducing
+#' Cargnelutti Filho et al. (2025) and the modern Brazilian plot-size papers.
+#' \code{method = "loglinear"} fits the line \eqn{\log CV = \log a - b \log X}
+#' (the classic Meier & Lessman route). If \code{"nls"} fails to converge it
+#' falls back to the log-linear estimate with a warning.
+#'
+#' @section Degrees-of-freedom correction:
+#' Pass \code{df}, the degrees of freedom of each point, to weight the fit as
+#' proposed by Federer (1955); this down-weights the CV of larger plot sizes,
+#' estimated from fewer plots. Some authors apply it, others do not;
+#' \code{df = NULL} (default) is unweighted. The cost-factor modification
+#' (K1, K2) of the classic method is not applied; \eqn{X_c} is in the units of
+#' \code{x}.
+#'
+#' @section Two ways to call:
+#' \describe{
+#'   \item{Vectors}{\code{fit_mcm(x, cv, df = NULL)} returns an \code{"mcm_fit"}.}
+#'   \item{Data frame}{\code{fit_mcm(.data, x = "x", cv = "cv", df = "df",
+#'     trial = "trial")}; with \code{trial}, one model per trial is fit and an
+#'     \code{"mcm_multi"} object is returned.}
+#' }
+#'
+#' @param .data optional data frame; when supplied the other arguments are
+#'   column names.
+#' @param x,cv numeric vectors (plot size and CV in percent), or column names.
+#' @param df optional degrees of freedom per point for the Federer (1955)
+#'   weighting, as a vector or a column name. \code{NULL} = unweighted.
+#' @param trial optional column name identifying the trial.
+#' @param method estimation method: \code{"nls"} (default, original scale;
+#'   reproduces the chickpea article) or \code{"loglinear"} (Meier & Lessman
+#'   regression).
+#' @return An \code{"mcm_fit"} (single series) or \code{"mcm_multi"} (per trial).
+#' @references
+#' Meier, V. D. & Lessman, K. J. (1971). Estimation of optimum field plot shape
+#' and size for testing yield in \emph{Crambe abyssinica} Hochst.
+#' \emph{Crop Science}, 11, 648-650. \cr
+#' Federer, W. T. (1955). \emph{Experimental Design}. Macmillan, New York.
+#' @seealso [fit_lrp()], [fit_qrp()], [plot.mcm_fit()]
+#' @examples
+#' grouped <- data.frame(
+#'   x  = c(1, 2, 4, 8, 2, 4, 8, 16, 3, 6, 12, 24, 6, 12, 24),
+#'   cv = c(19.55, 15.24, 10.05, 8.20, 14.02, 12.03, 7.71, 7.21,
+#'          11.51, 9.88, 11.59, 6.69, 7.50, 5.79, 3.08)
+#' )
+#' fit <- fit_mcm(grouped$x, grouped$cv)
+#' fit
+#' @export
+fit_mcm <- function(.data = NULL, x = NULL, cv = NULL, df = NULL, trial = NULL,
+                    method = c("nls", "loglinear")) {
+
+  method <- match.arg(method)
+
+  if (!is.null(.data) && !is.data.frame(.data)) {
+    cv <- x; x <- .data; .data <- NULL
+  }
+
+  if (is.null(.data)) {
+    if (is.null(x) || is.null(cv))
+      stop("Provide numeric `x` and `cv`, or a data frame as `.data`.",
+           call. = FALSE)
+    return(.mcm_fit_one(x, cv, method, df))
+  }
+
+  if (!is.data.frame(.data)) stop("`.data` must be a data frame.", call. = FALSE)
+
+  xcol  <- if (is.null(x))  "x"  else x
+  cvcol <- if (is.null(cv)) "cv" else cv
+  dfcol <- df  # column name or NULL
+  need  <- c(xcol, cvcol, if (!is.null(dfcol)) dfcol, if (!is.null(trial)) trial)
+  missing_cols <- setdiff(need, names(.data))
+  if (length(missing_cols))
+    stop(sprintf("Column(s) not found in `.data`: %s.\n  Available columns: %s.",
+                 paste(missing_cols, collapse = ", "),
+                 paste(names(.data), collapse = ", ")), call. = FALSE)
+
+  get_df <- function(g) if (is.null(dfcol)) NULL else g[[dfcol]]
+
+  if (is.null(trial)) {
+    message(sprintf("Using x = '%s', cv = '%s'%s (single series).",
+                    xcol, cvcol,
+                    if (is.null(dfcol)) "" else sprintf(", df = '%s'", dfcol)))
+    return(.mcm_fit_one(.data[[xcol]], .data[[cvcol]], method, get_df(.data)))
+  }
+
+  groups <- split(.data, .data[[trial]])
+  message(sprintf("Using x = '%s', cv = '%s'%s, trial = '%s' -> %d trials.",
+                  xcol, cvcol,
+                  if (is.null(dfcol)) "" else sprintf(", df = '%s'", dfcol),
+                  trial, length(groups)))
+
+  fits <- lapply(groups, function(g) .mcm_fit_one(g[[xcol]], g[[cvcol]], method, get_df(g)))
+  summ <- do.call(rbind, Map(function(f, nm) data.frame(
+    trial      = nm,
+    a          = round(unname(f$coefficients["a"]), 4),
+    b          = round(unname(f$coefficients["b"]), 4),
+    breakpoint = round(unname(f$parameters["Breakpoint"]), 4),
+    plateau    = round(unname(f$parameters["Breakpoint_Response"]), 4),
+    R2         = round(unname(f$parameters["R2"]), 4),
+    RMSE       = round(unname(f$parameters["RMSE"]), 4),
+    method     = f$method,
+    weighted   = f$weighted,
+    stringsAsFactors = FALSE), fits, names(fits)))
+  rownames(summ) <- NULL
+
+  structure(list(fits = fits, summary = summ), class = "mcm_multi")
+}
+
+## Methods --------------------------------------------------------------------
+#' Predictions from an MCM fit
+#' @param object an \code{"mcm_fit"} object.
+#' @param newx numeric predictor values; defaults to the fitted data.
+#' @param ... ignored.
+#' @return numeric vector of predicted CV values.
+#' @export
+predict.mcm_fit <- function(object, newx = NULL, ...) {
+  a <- object$coefficients["a"]; b <- object$coefficients["b"]
+  if (is.null(newx)) newx <- object$data$x
+  unname(a * newx^(-b))
 }
 
 #' @export
 print.mcm_fit <- function(x, ...) {
   cat("Modified Maximum Curvature (MCM) fit\n")
+  cat("Method:                 ", x$method, "\n")
+  cat("Weighted by df:         ", x$weighted, "\n")
   cat("Breakpoint (Xo):        ", sprintf("%.3f", x$parameters["Breakpoint"]), "\n")
   cat("CV at breakpoint:       ", sprintf("%.3f", x$parameters["Breakpoint_Response"]), "\n")
-  cat("R2:", sprintf("%.3f", x$parameters["R2"]), "\n")
+  cat("R2:", sprintf("%.3f", x$parameters["R2"]),
+      " RMSE:", sprintf("%.3f", x$parameters["RMSE"]), "\n")
   invisible(x)
 }
 
 #' @export
 summary.mcm_fit <- function(object, ...) {
-  cat("Model coefficients:\n")
-  print(object$coefficients)
-  cat("\nGoodness of fit:\n")
-  print(object$parameters)
+  cat("Model coefficients (CV = a * X^(-b)):\n"); print(object$coefficients)
+  cat("\nGoodness of fit:\n"); print(object$parameters)
   invisible(object)
 }
 
+#' Plot an MCM fit (publication style)
+#'
+#' Draws the observed points, the fitted power curve \eqn{a X^{-b}}, dotted
+#' guides to the maximum-curvature point and the model annotation. Unlike the
+#' plateau models there is no flat segment: the curve keeps decreasing.
+#'
+#' @param x an \code{"mcm_fit"} object.
+#' @param title,annotate_model,xlab,ylab,decimal_mark,digits_coef,digits_stat
+#'   as in [plot.lrp_fit()].
+#' @param point_size,line_size,point_colour,line_colour,bp_colour aesthetics.
+#' @param base_size,label_size,title_size,family,theme theme and text controls.
+#' @param save,file,format,dpi,width,height,units,compression saving controls.
+#' @param ... ignored.
+#' @return A \code{ggplot} object (invisibly when saved).
 #' @export
-plot.mcm_fit <- function(x, ...) {
-  print(x$plot)
-  invisible(x$plot)
+plot.mcm_fit <- function(x, title = "Modified Maximum Curvature",
+                         annotate_model = TRUE, xlab = NULL, ylab = "CV (%)",
+                         decimal_mark = c(".", ","),
+                         digits_coef = 3, digits_stat = 2,
+                         point_size = 2.3, line_size = 0.8,
+                         point_colour = "black", line_colour = "black",
+                         bp_colour = "red",
+                         base_size = 13, label_size = 4.6, title_size = NULL,
+                         family = "serif", theme = NULL,
+                         save = FALSE, file = NULL,
+                         format = c("tiff", "png", "jpeg", "pdf", "eps"),
+                         dpi = 300, width = 18, height = 12, units = "cm",
+                         compression = "lzw", ...) {
+
+  decimal_mark <- match.arg(decimal_mark)
+  format       <- match.arg(format)
+  if (is.null(title_size)) title_size <- base_size
+
+  fmtn <- function(v, d) {
+    s <- formatC(v, format = "f", digits = d)
+    if (decimal_mark == ",") s <- gsub("\\.", ",", s)
+    s
+  }
+
+  d  <- x$data
+  a  <- unname(x$coefficients["a"]); b <- unname(x$coefficients["b"])
+  xo <- unname(x$parameters["Breakpoint"])
+  p  <- unname(x$parameters["Breakpoint_Response"])
+  r2 <- unname(x$parameters["R2"])
+
+  xmax <- max(d$x) * 1.05
+  ymax <- max(d$cv) * 1.12
+  curve <- data.frame(x = seq(min(d$x), max(d$x), length.out = 400))
+  curve$cv <- predict(x, curve$x)
+
+  if (is.null(xlab)) xlab <- expression("Plot size (" * m^2 * ")")
+
+  g <- ggplot2::ggplot(d, ggplot2::aes(x, cv)) +
+    ggplot2::annotate("segment", x = 0, xend = xo, y = p, yend = p,
+                      linetype = 3, linewidth = 0.5) +
+    ggplot2::annotate("segment", x = xo, xend = xo, y = 0, yend = p,
+                      linetype = 3, linewidth = 0.5) +
+    ggplot2::geom_line(data = curve, ggplot2::aes(x, cv),
+                       linewidth = line_size, colour = line_colour) +
+    ggplot2::geom_point(size = point_size, colour = point_colour) +
+    ggplot2::annotate("point", x = xo, y = p, colour = bp_colour,
+                      size = point_size * 1.3)
+
+  if (annotate_model) {
+    a_s  <- fmtn(a, digits_coef);  b_s <- fmtn(b, digits_coef)
+    xo_s <- fmtn(xo, digits_stat); p_s <- fmtn(p, digits_stat)
+    r2_s <- fmtn(r2, digits_stat)
+
+    eq1 <- paste0("CV[(x)]=='", a_s, "'*X^{-'", b_s, "'}")
+    eq2 <- paste0("R^2=='", r2_s, "'")
+    lXo <- paste0("X[o]=='", xo_s, "'")
+    lCV <- paste0("CV[Xo]=='", p_s, "'")
+
+    xm <- 0.55 * xmax
+    ym <- ymax * c(0.97, 0.88)
+    for (i in 1:2)
+      g <- g + ggplot2::annotate("text", x = xm, y = ym[i],
+                                 label = c(eq1, eq2)[i], parse = TRUE,
+                                 hjust = 0.5, size = label_size, family = family)
+
+    xb <- xo + 0.03 * max(d$x)
+    yb <- c(max(p - 0.11 * ymax, 0.10 * ymax),
+            max(p - 0.20 * ymax, 0.02 * ymax))
+    for (i in 1:2)
+      g <- g + ggplot2::annotate("text", x = xb, y = yb[i],
+                                 label = c(lXo, lCV)[i], parse = TRUE,
+                                 hjust = 0, size = label_size, family = family)
+  }
+
+  g <- g +
+    ggplot2::scale_x_continuous(limits = c(0, xmax), expand = c(0, 0)) +
+    ggplot2::scale_y_continuous(limits = c(0, ymax), expand = c(0, 0)) +
+    ggplot2::labs(title = title, x = xlab, y = ylab) +
+    (if (is.null(theme))
+      ggplot2::theme_classic(base_size = base_size, base_family = family)
+     else theme) +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(hjust = 0.5, size = title_size),
+      axis.line  = ggplot2::element_line(colour = "black", linewidth = 0.6),
+      axis.ticks = ggplot2::element_line(colour = "black"),
+      axis.text  = ggplot2::element_text(colour = "black")
+    )
+
+  if (save) {
+    .save_lrp(g, file, title, format, dpi, width, height, units, compression)
+    return(invisible(g))
+  }
+  g
+}
+
+#' @export
+print.mcm_multi <- function(x, ...) {
+  cat(sprintf("MCM fits for %d trials\n\n", length(x$fits)))
+  print(x$summary, row.names = FALSE)
+  invisible(x)
+}
+
+#' @export
+summary.mcm_multi <- function(object, ...) {
+  print(object$summary, row.names = FALSE)
+  invisible(object)
+}
+
+#' Plot MCM fits for several trials (paginated grid)
+#'
+#' @param x an \code{"mcm_multi"} object.
+#' @param save,file,format,dpi,width,height,units,compression saving controls.
+#' @param ... styling arguments forwarded to [plot.mcm_fit()].
+#' @return A list of page objects, invisibly.
+#' @export
+plot.mcm_multi <- function(x, save = FALSE, file = NULL,
+                           format = c("tiff", "png", "jpeg", "pdf", "eps"),
+                           dpi = 300, width = 18, height = 24, units = "cm",
+                           compression = "lzw", ...) {
+  if (!requireNamespace("patchwork", quietly = TRUE))
+    stop("Package 'patchwork' is required to arrange multiple trials.",
+         call. = FALSE)
+  format <- match.arg(format)
+
+  plots <- Map(function(f, nm) plot(f, title = as.character(nm), save = FALSE, ...),
+               x$fits, names(x$fits))
+  idx    <- seq_along(plots)
+  chunks <- split(idx, ceiling(idx / 6))
+  pages  <- lapply(chunks, function(ix)
+    patchwork::wrap_plots(plots[ix], nrow = 3, ncol = 2))
+
+  if (save) {
+    base <- if (is.null(file)) "mcm_trials" else sub("\\.[^.]*$", "", file)
+    n <- length(pages)
+    for (i in seq_len(n)) {
+      fn <- if (n == 1) paste0(base, ".", format)
+      else sprintf("%s_p%d.%s", base, i, format)
+      .save_lrp(pages[[i]], fn, base, format, dpi, width, height, units,
+                compression)
+    }
+  } else {
+    for (pg in pages) print(pg)
+  }
+  invisible(pages)
 }
