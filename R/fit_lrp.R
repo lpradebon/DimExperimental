@@ -1,205 +1,139 @@
-#' Fit a Linear Response Plateau (LRP) model for plot size optimization
+#' Fit a Linear Response Plateau (LRP) model by grid search
 #'
-#' @description
-#' Fits a linear-plateau model to coefficient of variation (CV) values across
-#' a range of plot sizes, returning the breakpoint (optimal plot size), fit
-#' statistics, and a standardized ggplot2 visualization.
+#' Estimates the linear-plateau (broken-line) model
+#' \deqn{f(x) = a + b x \text{ for } x \le X_0, \qquad f(x) = a + b X_0 \text{ for } x > X_0}
+#' by profiling the breakpoint \eqn{X_0} over a grid. For each candidate
+#' breakpoint the linear coefficients are obtained by least squares and the
+#' plateau level is set to \eqn{a + b X_0}. The breakpoint that minimizes the
+#' residual sum of squares over all observations is returned. This avoids the
+#' starting-value and local-minimum problems of a direct \code{nls} fit, so no
+#' initial values are needed.
 #'
-#' @param x Numeric vector of plot sizes.
-#' @param cv Numeric vector of CV values (percent), same length as \code{x}.
-#' @param plot_title Character string used as the plot title. Default \code{NULL}.
-#' @param init_threshold Numeric. Subsets \code{x <= init_threshold} to build the
-#'   linear starting values for \code{nls}. Default \code{6}, matching the
-#'   original implementation. NOTE: this threshold is dataset-specific
-#'   (calibrated on the soybean trials). Flag for review once tested on
-#'   other datasets, see Details.
-#' @param base_size Base font size for the plot theme. Default \code{14}.
-#' @param font_family Font family for all plot text. Default \code{"sans"}.
-#' @param axis_expand_x,axis_expand_y Fractional margin added beyond the data
-#'   range when building axis limits. Default \code{0.05} (5%) each.
+#' The response is typically the coefficient of variation (CV, percent) and the
+#' predictor the plot size. Individual CV values (one per basic-unit form), not
+#' means per plot size, must be supplied. Repeated \code{x} values are expected
+#' and intended.
 #'
-#' @details
-#' The fitting method is unchanged from the original script: a single
-#' \code{nls} call initialized from a linear regression on the low-\code{x}
-#' subset. This was kept deliberately "as is" for this round of
-#' standardization. Known risk: \code{init_threshold = 6} was calibrated for
-#' plot sizes in the soybean trials range; for datasets with a different
-#' scale (e.g. plot sizes measured in different units, or a much narrower/
-#' wider range), this default may produce a poor starting value or too few
-#' points in the subset. This is exactly what the validation round across
-#' datasets should reveal.
+#' @param x numeric predictor (for example, plot size). Repeats allowed.
+#' @param cv numeric response (for example, CV in percent), same length as \code{x}.
+#' @param step grid step for the breakpoint search. Default 0.001, matching the
+#'   validation routine. Larger values are faster with slightly coarser Xo.
+#' @param method how the linear coefficients are estimated at each candidate
+#'   breakpoint. \code{"segment"} (default) uses only observations with
+#'   \code{x <= X0}, reproducing the Paranaiba et al. (2009) validation.
+#'   \code{"ramp"} uses all observations on the basis \code{pmin(x, X0)}, the
+#'   standard least-squares LRP.
 #'
-#' @return An object of class \code{lrp_fit}, a list with:
-#' \describe{
-#'   \item{call}{The matched call.}
-#'   \item{model}{The fitted \code{nls} object.}
-#'   \item{coefficients}{Coefficient table from \code{summary(model)}.}
-#'   \item{parameters}{Named vector: Breakpoint, Breakpoint_Response, AIC, BIC, R2, RMSE.}
-#'   \item{data}{Original \code{x}/\code{cv} data as a data frame.}
-#'   \item{curve}{Fitted curve, 500 points, for plotting.}
-#'   \item{plot}{A ggplot2 object. Not printed automatically.}
-#' }
-#'
-#' @examples
-#' \dontrun{
-#' fit <- fit_lrp(x = trial1$x, cv = trial1$cv, plot_title = "Trial 1")
-#' fit
-#' plot(fit)
-#' }
-#'
+#' @return An object of class \code{"lrp_fit"}: a list with \code{coefficients}
+#'   (a, b); \code{parameters} (Breakpoint, Breakpoint_Response, R2, RMSE, AIC,
+#'   BIC); \code{fitted}; \code{residuals}; \code{data}; \code{method}; \code{step}.
 #' @export
-fit_lrp <- function(x, cv,
-                    plot_title = NULL,
-                    init_threshold = 6,
-                    base_size = 14,
-                    font_family = "sans",
-                    axis_expand_x = 0.05,
-                    axis_expand_y = 0.05) {
+fit_lrp <- function(x, cv, step = 0.001, method = c("segment", "ramp")) {
 
-  call <- match.call()
+  method <- match.arg(method)
 
-  # ---- Input validation ----
-  if (length(x) != length(cv)) {
+  ## ---- input validation ----
+  if (!is.numeric(x) || !is.numeric(cv))
+    stop("`x` and `cv` must be numeric.", call. = FALSE)
+  if (length(x) != length(cv))
     stop("`x` and `cv` must have the same length.", call. = FALSE)
-  }
-  if (anyNA(x) || anyNA(cv)) {
+  if (anyNA(x) || anyNA(cv))
     stop("`x` and `cv` cannot contain missing values (NA).", call. = FALSE)
-  }
-  if (length(x) < 4) {
-    stop("At least 4 distinct points are required to fit a 3-parameter model.",
+  if (length(x) < 4)
+    stop("At least 4 observations are required.", call. = FALSE)
+  if (length(unique(x)) < 3)
+    stop("At least 3 distinct `x` values are required for the breakpoint grid.",
          call. = FALSE)
+
+  x_unique <- sort(unique(x))
+
+  ## ---- residual sum of squares for a fixed breakpoint ----
+  ss_at <- function(x0) {
+    if (method == "segment") {
+      m <- x <= x0
+      if (sum(m) < 2) return(list(ss = Inf))
+      cf <- stats::coef(stats::lm(cv[m] ~ x[m]))
+    } else {
+      z  <- pmin(x, x0)
+      cf <- stats::coef(stats::lm(cv ~ z))
+    }
+    a <- unname(cf[1]); b <- unname(cf[2])
+    p <- a + b * x0
+    fit <- ifelse(x <= x0, a + b * x, p)
+    list(ss = sum((cv - fit)^2), a = a, b = b, p = p)
   }
 
-  # ---- LRP model definition ----
-  lrp_model <- function(x, a, b, c) ifelse(x < c, a + b * x, a + b * c)
-
-  # ---- Initial values (unchanged from original) ----
-  subset_init <- x <= init_threshold
-  if (sum(subset_init) < 2) {
-    stop(sprintf(
-      "Fewer than 2 points with x <= %s to estimate initial values. Adjust `init_threshold`.",
-      init_threshold
-    ), call. = FALSE)
+  ## ---- grid search over the breakpoint ----
+  grid <- seq(x_unique[2], x_unique[length(x_unique)], by = step)
+  best <- list(ss = Inf)
+  for (x0 in grid) {
+    cand <- ss_at(x0)
+    if (cand$ss < best$ss) best <- c(cand, list(x0 = x0))
   }
-  ini <- coef(lm(cv[subset_init] ~ x[subset_init]))
+  if (!is.finite(best$ss))
+    stop("Grid search failed to find a valid breakpoint.", call. = FALSE)
 
-  # ---- Model fitting (unchanged: single nls call) ----
-  fit <- tryCatch(
-    nls(
-      cv ~ lrp_model(x, a, b, c),
-      start = list(a = ini[1], b = ini[2], c = mean(x)),
-      control = nls.control(maxiter = 500, warnOnly = TRUE)
+  a <- best$a; b <- best$b; x0 <- best$x0; p <- best$p
+
+  ## ---- fitted values and fit statistics ----
+  fitted    <- ifelse(x <= x0, a + b * x, p)
+  residuals <- cv - fitted
+  n         <- length(cv)
+  rss       <- sum(residuals^2)
+  r_squared <- 1 - rss / sum((cv - mean(cv))^2)
+  rmse      <- sqrt(mean(residuals^2))
+
+  ## AIC / BIC via the Gaussian log-likelihood (MLE variance = rss / n).
+  ## Parameter count k = a, b, Xo, sigma = 4, to match the nls / AIC.default
+  ## convention. Only comparable with the QRP fit if it uses the same count.
+  loglik <- -0.5 * n * (log(2 * pi) + log(rss / n) + 1)
+  k      <- 4L
+  aic    <- -2 * loglik + 2 * k
+  bic    <- -2 * loglik + log(n) * k
+
+  ## ---- plausibility warnings ----
+  if (b >= 0)
+    warning("Estimated slope is non-negative; the decreasing-plateau ",
+            "interpretation may not hold for these data.", call. = FALSE)
+  if (isTRUE(all.equal(x0, x_unique[2])) ||
+      isTRUE(all.equal(x0, x_unique[length(x_unique)])))
+    warning("Breakpoint is at the edge of the search range; the data may not ",
+            "capture the full descent or the plateau.", call. = FALSE)
+
+  structure(
+    list(
+      coefficients = c(a = a, b = b),
+      parameters   = c(Breakpoint = x0, Breakpoint_Response = p,
+                       R2 = r_squared, RMSE = rmse, AIC = aic, BIC = bic),
+      fitted       = fitted,
+      residuals    = residuals,
+      data         = data.frame(x = x, cv = cv),
+      method       = method,
+      step         = step
     ),
-    error = function(e) e
+    class = "lrp_fit"
   )
+}
 
-  if (inherits(fit, "error")) {
-    stop(sprintf(
-      "Model did not converge. Initial values used: a = %.3f, b = %.3f, c = %.3f. Original error: %s",
-      ini[1], ini[2], mean(x), conditionMessage(fit)
-    ), call. = FALSE)
-  }
-
-  # ---- Fit statistics ----
-  coefs <- coef(fit)
-  a <- coefs["a"]; b <- coefs["b"]; breakpoint <- coefs["c"]
-  breakpoint_response <- a + b * breakpoint
-
-  pred <- predict(fit)
-  resid <- cv - pred
-  r2 <- 1 - sum(resid^2) / sum((cv - mean(cv))^2)
-  rmse <- sqrt(mean(resid^2))
-  aic_val <- AIC(fit)
-  bic_val <- BIC(fit)
-
-  # ---- Fitted curve (for plotting) ----
-  curve_data <- data.frame(x = seq(min(x), max(x), length.out = 500))
-  curve_data$cv <- lrp_model(curve_data$x, a, b, breakpoint)
-
-  # ---- Original data ----
-  obs_data <- data.frame(x = x, cv = cv)
-
-  # ---- Dynamic axis limits (replaces hardcoded 0-45 / 0-25) ----
-  x_range <- range(c(x, breakpoint))
-  y_range <- range(c(cv, breakpoint_response, curve_data$cv))
-  x_margin <- diff(x_range) * axis_expand_x
-  y_margin <- diff(y_range) * axis_expand_y
-
-  xlim <- c(max(0, x_range[1] - x_margin), x_range[2] + x_margin)
-  ylim <- c(max(0, y_range[1] - y_margin), y_range[2] + y_margin)
-
-  # ---- Formatted equations for annotation ----
-  fmt <- function(v) sprintf("%.2f", v)
-  eq1 <- paste0("CV(x) == '", fmt(a), "'",
-                ifelse(b < 0, " - '", " + '"), fmt(abs(b)),
-                "'*X~'if X <='~'", fmt(breakpoint), "'")
-  eq2 <- paste0("CV(x) == '", fmt(breakpoint_response), "'~'if X >'~'", fmt(breakpoint), "'")
-  eq3 <- paste0("R^2 == '", fmt(r2), "'")
-  label_breakpoint <- paste0("Xo == '", fmt(breakpoint), "'")
-  label_response <- paste0("CVxo == '", fmt(breakpoint_response), "'")
-
-  x_eq <- mean(xlim)
-  y_eqs <- ylim[2] - diff(ylim) * c(0.05, 0.17, 0.28, 0.38, 0.48)
-
-  # ---- Plot ----
-  g <- ggplot2::ggplot(obs_data, ggplot2::aes(x, cv)) +
-    ggplot2::geom_point(size = 3) +
-    ggplot2::geom_line(data = curve_data, ggplot2::aes(x, cv), linewidth = 1) +
-    ggplot2::geom_segment(ggplot2::aes(x = 0, xend = breakpoint,
-                                       y = breakpoint_response, yend = breakpoint_response),
-                          linetype = 5) +
-    ggplot2::geom_segment(ggplot2::aes(x = breakpoint, xend = breakpoint,
-                                       y = 0, yend = breakpoint_response),
-                          linetype = 5) +
-    ggplot2::geom_point(ggplot2::aes(x = breakpoint, y = breakpoint_response),
-                        colour = "red", size = 3) +
-    ggplot2::annotate("text", x = x_eq, y = y_eqs[1], label = eq1,
-                      parse = TRUE, hjust = 0.5, family = font_family, size = base_size / 3.5) +
-    ggplot2::annotate("text", x = x_eq, y = y_eqs[2], label = eq2,
-                      parse = TRUE, hjust = 0.5, family = font_family, size = base_size / 3.5) +
-    ggplot2::annotate("text", x = x_eq, y = y_eqs[3], label = eq3,
-                      parse = TRUE, hjust = 0.5, family = font_family, size = base_size / 3.5) +
-    ggplot2::annotate("text", x = x_eq, y = y_eqs[4], label = label_breakpoint,
-                      parse = TRUE, hjust = 0.5, family = font_family, size = base_size / 3.5) +
-    ggplot2::annotate("text", x = x_eq, y = y_eqs[5], label = label_response,
-                      parse = TRUE, hjust = 0.5, family = font_family, size = base_size / 3.5) +
-    ggplot2::scale_x_continuous(limits = xlim, expand = c(0, 0)) +
-    ggplot2::scale_y_continuous(limits = ylim, expand = c(0, 0)) +
-    ggplot2::labs(title = plot_title,
-                  x = expression("Plot size (" * m^2 * ")"),
-                  y = "CV (%)") +
-    ggplot2::theme_classic(base_size = base_size, base_family = font_family) +
-    ggplot2::theme(
-      plot.title = ggplot2::element_text(hjust = 0.5),
-      axis.title = ggplot2::element_text(colour = "black"),
-      axis.text = ggplot2::element_text(colour = "black")
-    )
-
-  # ---- Structured output ----
-  result <- list(
-    call = call,
-    model = fit,
-    coefficients = summary(fit)$coefficients,
-    parameters = c(
-      Breakpoint = unname(breakpoint),
-      Breakpoint_Response = unname(breakpoint_response),
-      AIC = aic_val,
-      BIC = bic_val,
-      R2 = r2,
-      RMSE = rmse
-    ),
-    data = obs_data,
-    curve = curve_data,
-    plot = g
-  )
-
-  class(result) <- "lrp_fit"
-  result
+#' Predict from an LRP fit
+#'
+#' @param object an object of class \code{"lrp_fit"}.
+#' @param newx numeric vector of predictor values. Defaults to the fitted data.
+#' @param ... ignored.
+#' @return numeric vector of predicted responses.
+#' @export
+predict.lrp_fit <- function(object, newx = NULL, ...) {
+  a  <- object$coefficients["a"]
+  b  <- object$coefficients["b"]
+  xo <- object$parameters["Breakpoint"]
+  if (is.null(newx)) newx <- object$data$x
+  unname(ifelse(newx < xo, a + b * newx, a + b * xo))
 }
 
 #' @export
 print.lrp_fit <- function(x, ...) {
   cat("Linear Response Plateau (LRP) fit\n")
+  cat("Method:                 ", x$method, "\n")
   cat("Breakpoint (Xo):        ", sprintf("%.3f", x$parameters["Breakpoint"]), "\n")
   cat("CV at breakpoint:       ", sprintf("%.3f", x$parameters["Breakpoint_Response"]), "\n")
   cat("R2:", sprintf("%.3f", x$parameters["R2"]),
@@ -220,6 +154,28 @@ summary.lrp_fit <- function(object, ...) {
 
 #' @export
 plot.lrp_fit <- function(x, ...) {
-  print(x$plot)
-  invisible(x$plot)
+  d  <- x$data
+  xo <- unname(x$parameters["Breakpoint"])
+  p  <- unname(x$parameters["Breakpoint_Response"])
+  r2 <- unname(x$parameters["R2"])
+
+  curve_x <- seq(min(d$x), max(d$x), length.out = 400)
+  curve   <- data.frame(x = curve_x, cv = predict(x, curve_x))
+
+  g <- ggplot2::ggplot(d, ggplot2::aes(x, cv)) +
+    ggplot2::geom_point(size = 2) +
+    ggplot2::geom_line(data = curve, ggplot2::aes(x, cv), linewidth = 0.9) +
+    ggplot2::geom_segment(x = 0, xend = xo, y = p, yend = p,
+                          linetype = 2) +
+    ggplot2::geom_segment(x = xo, xend = xo, y = -Inf, yend = p,
+                          linetype = 2) +
+    ggplot2::geom_point(ggplot2::aes(x = xo, y = p), colour = "red", size = 3) +
+    ggplot2::labs(
+      x = expression("Plot size (" * m^2 * ")"), y = "CV (%)",
+      subtitle = sprintf("Xo = %.2f    CV(Xo) = %.2f    R2 = %.2f", xo, p, r2)
+    ) +
+    ggplot2::theme_classic()
+
+  print(g)
+  invisible(g)
 }
