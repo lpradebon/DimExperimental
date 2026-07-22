@@ -10,94 +10,52 @@ calc_replicates(
   lsd_percent,
   alpha = 0.05,
   design = c("CRD", "RCBD"),
-  r_init = 2,
-  tol = 1e-10,
-  max_iter = 1000,
-  plot = TRUE
+  tol = 1e-09,
+  max_iter = 1000
 )
 }
 \arguments{
-\item{treatments}{Numeric vector. Number of treatments evaluated in the
-experiment.}
+\item{treatments}{numeric vector; numbers of treatments (>= 2).}
 
-\item{cv_percent}{Numeric. Experimental coefficient of variation (%),
-typically obtained from the optimal plot size (Xo) estimated from
-uniformity trials (see \code{fit_lrp}/\code{fit_qrp}).}
+\item{cv_percent}{single numeric; experimental CV (%), e.g. the CVxo from
+[fit_lrp()]/[fit_qrp()]/[fit_mcm()].}
 
-\item{lsd_percent}{Numeric vector. Least significant difference (LSD),
-expressed as a percentage of the experimental mean.}
+\item{lsd_percent}{numeric vector; least significant differences (% of mean).}
 
-\item{alpha}{Numeric, optional. Significance level used in the Tukey
-test. Default \code{0.05}.}
+\item{alpha}{significance level for the Tukey test (default 0.05).}
 
-\item{design}{Character, optional. Experimental design, either
-\code{"CRD"} (completely randomized design) or \code{"RCBD"}
-(randomized complete block design).}
+\item{design}{"CRD" or "RCBD".}
 
-\item{r_init}{Numeric, optional. Initial value for the number of
-replications used in the iterative process. Default \code{2}.}
-
-\item{tol}{Numeric, optional. Numerical tolerance used as the
-convergence criterion between successive iterations. Default \code{1e-10}.}
-
-\item{max_iter}{Integer, optional. Maximum number of iterations allowed
-in the iterative procedure. Default \code{1000}.}
-
-\item{plot}{Logical, optional. If \code{TRUE}, builds diagnostic plots
-relating the optimal number of replications to the number of
-treatments and to the Tukey critical value. Default \code{TRUE}. The
-plot is stored in the returned object, not printed automatically.}
+\item{tol, max_iter}{convergence tolerance and iteration cap for the fixed
+point (defaults 1e-9 and 1000).}
 }
 \value{
-An object of class \code{replicates_fit}, a list with:
-\describe{
-  \item{call}{The matched call.}
-  \item{data}{A data frame with, for each combination of number of
-    treatments and LSD: \code{Treatments}, \code{CV_percent},
-    \code{LSD_percent}, \code{Alpha}, \code{Design}, \code{r_continuous},
-    \code{r_optimal}, \code{df_error}, \code{q_tukey}, \code{converged}.}
-  \item{plot}{A combined ggplot2/patchwork object, or \code{NULL} if
-    \code{plot = FALSE}. Not printed automatically.}
-}
+An object of class \code{"replicates_fit"}: \code{data} (Treatments,
+  CV_percent, LSD_percent, Alpha, Design, r_continuous, r_optimal, df_error,
+  q_tukey, converged) and \code{meta}.
 }
 \description{
-Estimates the optimal number of replications for agricultural
-experiments, following the methodology described by Cargnelutti Filho
-et al. (2014), considering different numbers of treatments, experimental
-coefficient of variation, least significant difference (LSD), and
-significance level, based on the critical value of the Tukey test. The
-calculation is performed iteratively for completely randomized designs
-(CRD) and randomized complete block designs (RCBD).
+Estimates the number of replications for CRD or RCBD experiments following
+Cargnelutti Filho et al. (2014), from the number of treatments, the
+experimental coefficient of variation, the least significant difference (LSD,
+as a percent of the mean) and the significance level, using the Tukey
+(studentized range) critical value.
 }
 \details{
-The optimal number of replications is obtained from:
-\deqn{r = \left(\frac{q_{\alpha} \cdot CV}{LSD}\right)^2}
-where \eqn{q_{\alpha}} is the Tukey critical value, \eqn{CV} is the
-experimental coefficient of variation (%), and \eqn{LSD} is the least
-significant difference (%). Since \eqn{q_{\alpha}} depends on the error
-degrees of freedom, which in turn depend on the number of replications,
-the procedure is solved iteratively until convergence, following
-Cargnelutti Filho et al. (2014).
-
-If a given combination of treatments/LSD does not converge within
-\code{max_iter} iterations, a warning is issued and the corresponding
-row is flagged in the \code{converged} column of the result.
+The required replications solve \eqn{r = (q_\alpha CV / LSD)^2}, where
+\eqn{q_\alpha} is the Tukey critical value. Since \eqn{q_\alpha} depends on the
+error df, which depends on \eqn{r}, the problem is solved iteratively. Two
+readings are returned: \code{r_continuous}, the continuous fixed point (this
+reproduces the published tables), and \code{r_optimal}, the practical
+\code{ceiling(r_continuous)} floored at 2 (a design needs at least two
+replications). Error df: \eqn{t(r-1)} for CRD and \eqn{(t-1)(r-1)} for RCBD.
 }
 \examples{
-\dontrun{
-fit <- calc_replicates(
-  treatments  = 3:50,
-  cv_percent  = 8.97,
-  lsd_percent = c(10, 20, 30, 40, 50),
-  design      = "CRD"
-)
+fit <- calc_replicates(treatments = 3:50, cv_percent = 9.25,
+                       lsd_percent = c(10, 20, 30), design = "CRD")
 fit
-plot(fit)
-}
-
 }
 \references{
-Cargnelutti Filho, A., Alves, B. M., Toebe, M., Burin, C., Santos, G. O.,
-Facco, G., Neu, I. M. M., & Stefanello, R. B. (2014). Tamanho de parcela e
-numero de repeticoes em aveia preta. Ciencia Rural, 44(10), 1732-1739.
+Cargnelutti Filho, A. et al. (2014). Tamanho de parcela e numero de
+repeticoes em aveia preta. \emph{Ciencia Rural}, 44(10), 1732-1739.
 }

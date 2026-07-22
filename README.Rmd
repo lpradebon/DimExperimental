@@ -27,13 +27,20 @@ number of replications, with standardized diagnostic statistics and
 plots:
 
 - `fit_lrp()`: optimal plot size via the Linear Response Plateau model
+  (Paranaiba, Ferreira & Morais, 2009)
 - `fit_qrp()`: optimal plot size via the Quadratic Response Plateau model
+  (Peixoto, Faria & Morais, 2011)
 - `fit_mcm()`: optimal plot size via the Modified Maximum Curvature
-  method (Meier & Lessmann, 1971)
+  method (Meier & Lessman, 1971)
 - `calc_paranaiba()`: optimal plot size via the Paranaiba method
   (Paranaiba, Ferreira & Morais, 2009)
 - `calc_replicates()`: optimal number of replications (Cargnelutti
   Filho et al., 2014)
+
+The three plot-size functions share the same interface (numeric vectors
+or a data frame with a trial column), return standardized fit statistics,
+and produce publication-style plots that can be saved directly to TIFF,
+PDF or PNG.
 
 ## Installation
 
@@ -71,10 +78,43 @@ annotations in the layout commonly used in plot-size articles:
 plot(fit, title = "Uniformity trial example")
 ```
 
+To export a figure, use `save = TRUE`; TIFF is written with LZW
+compression, and vector formats are available for line art:
+
+``` r
+plot(fit, title = "Uniformity trial example",
+     save = TRUE, file = "trial.tiff", format = "tiff", dpi = 300)
+```
+
+## Comparing plot-size methods
+
+The Linear Response Plateau, Quadratic Response Plateau and Modified
+Maximum Curvature methods are called the same way and often give
+different optima. The optimal plot size typically increases in the order
+MCM < LRP < QRP:
+
+```{r compare}
+lrp <- fit_lrp(plot_size, cv)
+qrp <- fit_qrp(plot_size, cv)
+mcm <- fit_mcm(plot_size, cv)
+
+data.frame(
+  method = c("MCM", "LRP", "QRP"),
+  Xo   = c(mcm$parameters["Breakpoint"],
+           lrp$parameters["Breakpoint"],
+           qrp$parameters["Breakpoint"]),
+  CVxo = c(mcm$parameters["Breakpoint_Response"],
+           lrp$parameters["Breakpoint_Response"],
+           qrp$parameters["Breakpoint_Response"]),
+  row.names = NULL
+)
+```
+
 ### Several trials at once
 
 Pass a data frame and the column names to fit one model per trial. The
-result carries a per-trial summary table plus the individual fits:
+result carries a per-trial summary table plus the individual fits (this
+works for `fit_lrp()`, `fit_qrp()` and `fit_mcm()`):
 
 ```{r example-trials}
 trials <- rbind(
@@ -89,6 +129,27 @@ res$summary
 If the optimum is known to lie in a given region, restrict the
 breakpoint search with `search_range`, for example
 `fit_lrp(x = plot_size, cv = cv, search_range = c(5, 20))`.
+
+## Number of replications
+
+The CV at the optimal plot size feeds directly into the number of
+replications needed to detect a given difference between treatment means
+(as a percent of the mean), for CRD or RCBD designs:
+
+```{r replicates}
+cvxo <- unname(lrp$parameters["Breakpoint_Response"])
+
+reps <- calc_replicates(
+  treatments  = c(3, 5, 10, 20),
+  cv_percent  = cvxo,
+  lsd_percent = c(10, 20, 30),
+  design      = "CRD"
+)
+reps
+```
+
+The output reports both `r_continuous` (the tabulated value) and
+`r_optimal` (the practical integer, at least 2).
 
 ## Citation
 
