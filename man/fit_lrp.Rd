@@ -11,7 +11,9 @@ fit_lrp(
   trial = NULL,
   step = 0.001,
   method = c("segment", "ramp"),
-  search_range = NULL
+  search_range = NULL,
+  start = NULL,
+  local_min_tol = 0.1
 )
 }
 \arguments{
@@ -39,12 +41,26 @@ interval (in units of \code{x}) where the breakpoint is searched. Must fall
 within the data range. Useful when the optimum is known to lie in a region
 and an outlier could otherwise pull the breakpoint outside it. \code{NULL}
 (default) searches the full feasible interval.}
+
+\item{start}{optional single breakpoint value. The fit is unchanged, but the
+result also carries a \code{$compat} element holding the local minimum of
+the basin containing \code{start}: the solution a gradient-based fitter
+(\code{nls}, \code{nlsLM}) seeded there would return. Use it to reproduce
+published results obtained with such implementations, and to see how much
+worse they fit.}
+
+\item{local_min_tol}{relative SSE tolerance (default 0.10) for warning about
+a competing local minimum. A second basin fitting within 10\% of the
+optimum means the breakpoint is not sharply identified.}
 }
 \value{
 For a single series, an object of class \code{"lrp_fit"}: a list with
 \code{coefficients} (a, b); \code{parameters} (Breakpoint, Breakpoint_Response,
 R2, RMSE, AIC, BIC); \code{fitted}; \code{residuals}; \code{data};
-\code{method}; \code{step}. \cr
+\code{method}; \code{step}; \code{local_minima} (competing basins, with
+their SSE excess over the optimum, or \code{NULL}); \code{sse_profile} (the
+SSE at every candidate breakpoint); and \code{compat} when \code{start} was
+given. \cr
 With \code{trial}, an object of class \code{"lrp_multi"}: a list with
 \code{summary} (one row per trial), \code{fits} (the individual
 \code{"lrp_fit"} objects) and \code{method}.
@@ -65,6 +81,18 @@ The response is typically the coefficient of variation (CV, percent) and the
 predictor the plot size. Supply the individual CV values (one per basic-unit
 form), not the means per plot size; repeated \code{x} values are expected.
 }
+\section{Competing breakpoints}{
+
+With few distinct plot sizes the residual sum of squares is a stepped
+function of the breakpoint, and it often has several local minima. The grid
+search always returns the global optimum, but a second basin may fit almost
+as well, in which case the breakpoint is not sharply identified and different
+implementations legitimately disagree. Any competing minima are reported in
+\code{$local_minima}, and a warning is issued when one of them fits within
+\code{local_min_tol} of the optimum. Gradient-based fitters return whichever
+basin their starting value lands in; \code{start} reproduces that.
+}
+
 \section{Two ways to call}{
 
 \describe{

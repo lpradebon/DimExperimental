@@ -40,6 +40,11 @@ Depends:
     R (>= 3.5)
 Imports:
     ggplot2
-Suggests: knitr, rmarkdown, patchwork
+Suggests: 
+    knitr,
+    rmarkdown,
+    patchwork,
+    testthat (>= 3.0.0)
 VignetteBuilder: knitr
 Config/roxygen2/version: 8.0.0
+Config/testthat/edition: 3

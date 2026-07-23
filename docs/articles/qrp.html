@@ -260,7 +260,11 @@ decimal control, <code>digits_c</code> (4 by default), separate from
 <span><span class="co">#&gt;    trial       a       b      c breakpoint plateau     R2   RMSE    AIC    BIC</span></span>
 <span><span class="co">#&gt;  Trial 1 30.1674 -4.1345 0.1885     10.965  7.4998 0.7406 3.6827 89.677 92.510</span></span>
 <span><span class="co">#&gt;  Trial 2 36.5290 -3.6542 0.2158      8.466 21.0610 0.4848 4.0557 92.572 95.404</span></span>
-<span><span class="co">#&gt;  Trial 3 31.6203 -2.9831 0.1319     11.308 14.7539 0.5406 4.2995 94.323 97.155</span></span></code></pre></div>
+<span><span class="co">#&gt;  Trial 3 31.6203 -2.9831 0.1319     11.308 14.7539 0.5406 4.2995 94.323 97.155</span></span>
+<span><span class="co">#&gt;  n_local</span></span>
+<span><span class="co">#&gt;        0</span></span>
+<span><span class="co">#&gt;        0</span></span>
+<span><span class="co">#&gt;        0</span></span></code></pre></div>
 <p>The summary table carries the extra <code>c</code> column, since the
 QRP has three coefficients. The three breakpoints average 10.25 m², the
 article’s QRP figure.</p>
@@ -315,6 +319,9 @@ ordering:</p>
 <span>         <span class="fu"><a href="../reference/fit_qrp.html">fit_qrp</a></span><span class="op">(</span><span class="va">X</span>, <span class="va">CV1</span><span class="op">)</span><span class="op">$</span><span class="va">parameters</span><span class="op">[</span><span class="st">"Breakpoint"</span><span class="op">]</span><span class="op">)</span>,</span>
 <span>  row.names <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span>
+<span><span class="co">#&gt; Warning: Competing local minimum at breakpoint 9.280 (SSE 7.5% above the</span></span>
+<span><span class="co">#&gt; optimum at 7.436). The breakpoint is not sharply identified; see $local_minima</span></span>
+<span><span class="co">#&gt; and consider `search_range`.</span></span>
 <span><span class="co">#&gt;   method        Xo</span></span>
 <span><span class="co">#&gt; 1    MCM  5.754886</span></span>
 <span><span class="co">#&gt; 2    LRP  7.436000</span></span>

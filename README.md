@@ -58,12 +58,21 @@ plot_size <- c(1, 2, 4, 6, 8, 10, 15, 20, 25, 30)
 cv        <- c(22.1, 18.4, 14.2, 11.8, 10.1, 9.3, 8.1, 7.6, 7.4, 7.3)
 
 fit <- fit_lrp(x = plot_size, cv = cv)
+#> Warning: Competing local minimum at breakpoint 7.395 (SSE 7.1% above the
+#> optimum at 8.648). The breakpoint is not sharply identified; see $local_minima
+#> and consider `search_range`.
 fit
 #> Linear Response Plateau (LRP) fit
 #> Method:                  segment 
 #> Breakpoint (Xo):         8.648 
 #> CV at breakpoint:        7.940 
-#> R2: 0.963  RMSE: 0.935  AIC: 35.0  BIC: 36.3
+#> R2: 0.963  RMSE: 0.935  AIC: 35.0  BIC: 36.3 
+#> 
+#> Competing local minima (7):
+#>   Xo =   7.395   SSE   +7.1% vs optimum
+#>   Xo =  10.059   SSE  +40.2% vs optimum
+#>   Xo =   5.999   SSE +103.9% vs optimum
+#>   ... see $local_minima for all
 ```
 
 The plot title (and other options) go on the `plot()` method, which
@@ -92,6 +101,9 @@ MCM \< LRP \< QRP:
 
 ``` r
 lrp <- fit_lrp(plot_size, cv)
+#> Warning: Competing local minimum at breakpoint 7.395 (SSE 7.1% above the
+#> optimum at 8.648). The breakpoint is not sharply identified; see $local_minima
+#> and consider `search_range`.
 qrp <- fit_qrp(plot_size, cv)
 mcm <- fit_mcm(plot_size, cv)
 
@@ -138,10 +150,19 @@ trials <- rbind(
 
 res <- fit_lrp(trials, x = "plot_size", cv = "cv", trial = "trial")
 #> Using x = 'plot_size', cv = 'cv', trial = 'trial' -> 2 trials.
+#> Warning: Competing local minimum at breakpoint 7.395 (SSE 7.1% above the
+#> optimum at 8.648). The breakpoint is not sharply identified; see $local_minima
+#> and consider `search_range`.
+#> Warning: Competing local minimum at breakpoint 7.395 (SSE 7.1% above the
+#> optimum at 8.648). The breakpoint is not sharply identified; see $local_minima
+#> and consider `search_range`.
 res$summary
 #>     trial       a       b breakpoint plateau     R2   RMSE    AIC    BIC
 #> 1 Trial A 22.2884 -1.6591      8.648  7.9401 0.9628 0.9354 35.043 36.253
 #> 2 Trial B 23.7884 -1.6591      8.648  9.4401 0.9628 0.9354 35.043 36.253
+#>   n_local
+#> 1       7
+#> 2       7
 ```
 
 If the optimum is known to lie in a given region, restrict the
@@ -210,13 +231,13 @@ reps
 #>           6   7.940117          10  0.05    CRD        10.93        11       60
 #>           7   7.940117          10  0.05    CRD        11.58        12       77
 #>           8   7.940117          10  0.05    CRD        12.15        13       96
-#>  q_tukey converged
-#>    3.532      TRUE
-#>    3.809      TRUE
-#>    4.002      TRUE
-#>    4.163      TRUE
-#>    4.282      TRUE
-#>    4.382      TRUE
+#>  q_tukey converged at_floor
+#>    3.532      TRUE    FALSE
+#>    3.809      TRUE    FALSE
+#>    4.002      TRUE    FALSE
+#>    4.163      TRUE    FALSE
+#>    4.282      TRUE    FALSE
+#>    4.382      TRUE    FALSE
 ```
 
 The output reports both `r_continuous` (the tabulated value) and

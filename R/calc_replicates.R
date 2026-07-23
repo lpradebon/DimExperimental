@@ -69,17 +69,31 @@ calc_replicates <- function(treatments, cv_percent, lsd_percent, alpha = 0.05,
   df_of <- function(t, r) if (design == "CRD") t * (r - 1) else (t - 1) * (r - 1)
 
   ## continuous fixed point r = (q(df(r)) CV / LSD)^2
+  ##
+  ## The fixed point only exists while the implied error df stay positive,
+  ## i.e. while r > 1. When the required precision is so loose that r would
+  ## fall below the two replications any design needs, the iteration has no
+  ## meaningful solution: it is reported at the r = 2 floor, flagged by
+  ## `at_floor`, and r_optimal is 2.
   r_fixed <- function(t, lsd) {
+    ## requirement evaluated at the floor: if two replications already
+    ## satisfy it, the continuous fixed point lies below the floor
+    q2 <- suppressWarnings(stats::qtukey(1 - alpha, nmeans = t,
+                                         df = df_of(t, 2)))
+    if (!is.nan(q2) && (q2 * cv_percent / lsd)^2 <= 2)
+      return(list(r = 2, converged = TRUE, at_floor = TRUE))
+
     r <- 4; converged <- FALSE
     for (it in seq_len(max_iter)) {
-      df <- max(1, df_of(t, r))
+      df <- df_of(t, r)
+      if (df < 1) { r <- r + 0.5; next }
       q  <- suppressWarnings(stats::qtukey(1 - alpha, nmeans = t, df = df))
       if (is.nan(q)) { r <- r + 0.5; next }
       rn <- (q * cv_percent / lsd)^2
       if (abs(rn - r) < tol) { r <- rn; converged <- TRUE; break }
       r <- (r + rn) / 2
     }
-    list(r = r, converged = converged)
+    list(r = r, converged = converged, at_floor = FALSE)
   }
 
   one <- function(t, lsd) {
@@ -90,7 +104,8 @@ calc_replicates <- function(treatments, cv_percent, lsd_percent, alpha = 0.05,
     data.frame(Treatments = t, CV_percent = cv_percent, LSD_percent = lsd,
                Alpha = alpha, Design = design,
                r_continuous = fp$r, r_optimal = r_opt,
-               df_error = df, q_tukey = q, converged = fp$converged)
+               df_error = df, q_tukey = q, converged = fp$converged,
+               at_floor = fp$at_floor)
   }
 
   result_data <- do.call(rbind, lapply(lsd_percent, function(lsd)

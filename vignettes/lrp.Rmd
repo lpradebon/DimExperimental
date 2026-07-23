@@ -42,15 +42,23 @@ $$
 
 ### How the breakpoint is estimated
 
-Fitting a broken line is awkward for general-purpose nonlinear least squares:
-the model has a kink, so `nls()` depends heavily on the starting values and can
-settle on a local minimum or fail to converge without saying so clearly.
+Fitting a broken line is awkward for general-purpose nonlinear least squares.
+The model has a kink, and the residual sum of squares (SSE) is a *stepped*
+function of the breakpoint: moving $X_o$ between two observed plot sizes does
+not change which points fall in each segment, so the SSE stays flat and its
+derivative is zero. Gradient-based fitters such as `nls()` and `nlsLM()` stall
+on those flat steps and return whichever basin their starting value happened to
+land in.
 
 `fit_lrp()` avoids this by **profiling** the breakpoint. It walks a fine grid of
 candidate values for $X_o$; at each candidate the model becomes linear, so the
 coefficients come from ordinary least squares. The candidate with the smallest
-residual sum of squares wins. There are no starting values, no local minima, and
-no convergence failures.
+SSE wins. There are no starting values and no convergence failures, and the
+result is the global least-squares optimum by construction.
+
+That does not make the breakpoint unambiguous, though: the profile may have
+several basins that fit almost equally well. See
+[Competing breakpoints](#competing-breakpoints) below.
 
 ### References
 
@@ -90,7 +98,8 @@ fit
 ```
 
 $X_o = 7.44$ m² with $CV_{Xo} = 7.88\%$, reproducing the published values for
-trial 1.
+trial 1. The competing minima listed underneath are explained
+[further down](#competing-breakpoints).
 
 `summary()` splits the model coefficients from the fit statistics:
 
@@ -156,11 +165,12 @@ trials <- rbind(
 )
 
 res <- fit_lrp(trials, x = "x", cv = "cv", trial = "trial")
-res
+res$summary
 ```
 
 The three breakpoints (7.44, 6.56, 7.57) match the published table, and their
-mean, 7.19 m², is the article's overall recommendation.
+mean, 7.19 m², is the article's overall recommendation. The `n_local` column
+counts competing basins per trial.
 
 The individual fits stay accessible, so any single trial can be inspected or
 plotted as usual:
@@ -183,6 +193,79 @@ clear error rather than a cryptic one:
 
 ```{r error, error = TRUE}
 fit_lrp(trials, x = "x", cv = "CV", trial = "trial")
+```
+
+## Competing breakpoints {#competing-breakpoints}
+
+Uniformity trials rarely have many distinct plot sizes, so the SSE profile is
+stepped and often has several local minima. The grid search always returns the
+global optimum, but a second basin may fit nearly as well. When that happens the
+breakpoint is **not sharply identified**, and different software will
+legitimately report different values.
+
+`fit_lrp()` makes this visible instead of hiding it. Every fit carries
+`$local_minima`, and a warning fires when a competitor fits within
+`local_min_tol` (10% by default) of the optimum:
+
+```{r competing}
+fit2 <- fit_lrp(X, CV2)
+```
+
+```{r competing-table}
+round(fit2$local_minima, 3)
+```
+
+Read the `SSE_excess` column as "how much worse than the optimum". Here the
+runner-up at $X_o = 5.47$ fits only **0.9% worse** than the reported 6.56. For
+practical purposes those two plot sizes are tied, and the published 6.56 carries
+more uncertainty than its two decimals suggest. A competitor 30% worse, in
+contrast, can be safely dismissed.
+
+The whole profile is available for inspection or plotting:
+
+```{r profile, fig.height = 3.5}
+prof <- fit2$sse_profile
+plot(prof$breakpoint, prof$SSE, type = "l",
+     xlab = "Breakpoint", ylab = "SSE", las = 1)
+abline(v = fit2$parameters["Breakpoint"], col = "forestgreen", lwd = 2)
+abline(v = fit2$local_minima$breakpoint, col = "red", lty = 2)
+```
+
+### Reproducing a fit from another package
+
+When a colleague's `nls()`-based script or another package reports a different
+breakpoint, it is usually because their starting value landed in another basin.
+The `start` argument reproduces that solution *without changing the reported
+fit*, so you can see exactly what they got and what it cost in fit quality:
+
+```{r compat}
+soy_x  <- c(1, 2, 4, 8, 2, 4, 8, 16, 4, 8, 16, 32, 5, 10, 20, 40)
+soy_cv <- c(18.699092, 14.130115, 10.321934, 7.990773, 12.690754, 9.995547,
+            7.916291, 7.588785, 9.276139, 7.130636, 4.777755, 4.279987,
+            8.411412, 5.818440, 3.431264, 3.335962)
+
+seeded <- fit_lrp(soy_x, soy_cv, start = 10.17)
+seeded$compat
+```
+
+The reported fit is still the optimum at 5.79; `$compat` shows that a fitter
+seeded near 10 would stop at 10.17 with an SSE 15% higher. That is a large
+enough gap to prefer the optimum, but the number is there for you to judge, and
+to cite when reconciling results across software.
+
+### Deciding between basins
+
+A statistically better fit is not automatically the better agronomic answer. A
+very early breakpoint can be a "false plateau": the trial may lack the range of
+plot sizes needed for a genuine plateau to emerge, so the model latches onto a
+flat stretch that is really just noise. When two basins are close in SSE, weigh
+the number of points supporting each segment, whether the plateau looks
+plausible on the plot, and what plot sizes are feasible in the field.
+
+Once you have decided, `search_range` documents the choice explicitly:
+
+```{r search-range-basin}
+fit_lrp(soy_x, soy_cv, search_range = c(8, 20))$parameters["Breakpoint"]
 ```
 
 ## Fine-tuning
@@ -213,9 +296,13 @@ also inform the descending line, which can shift the optimum.
 fit_lrp(X, CV1, method = "ramp")$parameters["Breakpoint"]
 ```
 
+**`local_min_tol`** sets how close a competitor must fit before the warning
+fires. Lower it to be alerted only about near-ties, raise it to be told about
+any competitor.
+
 ## Warnings worth heeding
 
-Two situations trigger a warning, and both mean the estimate deserves a second
+Three situations trigger a warning, and all mean the estimate deserves a second
 look rather than direct use:
 
 - **Non-negative slope**: the CV is not decreasing with plot size, so the
@@ -223,10 +310,14 @@ look rather than direct use:
 - **Breakpoint at the edge of the search range**: the trial may not span enough
   plot sizes to bracket the true optimum, so the CV may still be falling at the
   largest size evaluated.
+- **Competing local minimum**: another breakpoint fits nearly as well, so the
+  estimate is not sharply identified. Inspect `$local_minima` before reporting a
+  single value.
 
 ## Where to go next
 
 `vignette("qrp")` and `vignette("mcm")` cover the other two CV-based methods,
 which take the same inputs and usually give a larger and a smaller optimum
-respectively. `vignette("replicates")` shows how $CV_{Xo}$ feeds into the number
-of replications.
+respectively. The QRP joins its plateau smoothly, so its SSE profile is a single
+smooth basin and competing minima are rare. `vignette("replicates")` shows how
+$CV_{Xo}$ feeds into the number of replications.

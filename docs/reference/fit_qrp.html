@@ -86,7 +86,9 @@ curvature, so it is fit by least squares with no starting values, and the
 <span>  cv <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  trial <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  step <span class="op">=</span> <span class="fl">0.001</span>,</span>
-<span>  search_range <span class="op">=</span> <span class="cn">NULL</span></span>
+<span>  search_range <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  start <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  local_min_tol <span class="op">=</span> <span class="fl">0.1</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -115,10 +117,28 @@ are column names.</p></dd>
 <dd><p>optional <code>c(lower, upper)</code> restricting the breakpoint
 search; must fall within the data range.</p></dd>
 
+
+<dt id="arg-start">start<a class="anchor" aria-label="anchor" href="#arg-start"></a></dt>
+<dd><p>optional single breakpoint value. The fit is unchanged, but the
+result also carries <code>$compat</code>: the local minimum of the basin
+containing <code>start</code>, i.e. what a gradient-based fitter seeded there
+would return. Rarely needed for the QRP, whose SSE profile is usually a
+single smooth basin.</p></dd>
+
+
+<dt id="arg-local-min-tol">local_min_tol<a class="anchor" aria-label="anchor" href="#arg-local-min-tol"></a></dt>
+<dd><p>relative SSE tolerance (default 0.10) for warning about
+a competing local minimum.</p></dd>
+
 </dl></div>
     <div id="value">
     <h2>Value</h2>
-    <p>A <code>"qrp_fit"</code> (single series) or <code>"qrp_multi"</code> (per trial).</p>
+    <p>A <code>"qrp_fit"</code> (single series) or <code>"qrp_multi"</code> (per trial).
+  The fit also carries <code>local_minima</code> (competing basins with their SSE
+  excess over the optimum, or <code>NULL</code>), <code>sse_profile</code>, and
+  <code>compat</code> when <code>start</code> was given. Because the quadratic-plateau
+  joins smoothly, this profile is typically a single basin, unlike the
+  stepped profile of [fit_lrp()].</p>
     </div>
     <div id="two-ways-to-call">
     <h2>Two ways to call</h2>

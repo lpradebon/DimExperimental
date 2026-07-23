@@ -11,7 +11,8 @@
 ## ============================================================================
 
 ## Internal single-series engine ---------------------------------------------
-.qrp_fit_one <- function(x, cv, step = 0.001, search_range = NULL) {
+.qrp_fit_one <- function(x, cv, step = 0.001, search_range = NULL,
+                         start = NULL, local_min_tol = 0.10) {
 
   if (!is.numeric(x) || !is.numeric(cv))
     stop("`x` and `cv` must be numeric.", call. = FALSE)
@@ -56,15 +57,62 @@
   }
 
   grid <- seq(grid_lo, grid_hi, by = step)
-  best <- list(ss = Inf)
-  for (x0 in grid) {
-    cand <- ss_at(x0)
-    if (cand$ss < best$ss) best <- c(cand, list(x0 = x0))
-  }
-  if (!is.finite(best$ss))
+  ss_profile <- vapply(grid, function(x0) ss_at(x0)$ss, numeric(1))
+
+  if (!any(is.finite(ss_profile)))
     stop("Grid search failed to find a valid breakpoint.", call. = FALSE)
 
-  x0 <- best$x0; A <- best$A; cc <- best$cc
+  i_best <- which.min(ss_profile)
+  best <- ss_at(grid[i_best])
+  x0 <- grid[i_best]; A <- best$A; cc <- best$cc
+  ss_best <- ss_profile[i_best]
+
+  ## ---- local minima of the SSE profile -------------------------------------
+  ## The quadratic-plateau joins smoothly, so this profile is usually a single
+  ## smooth basin (unlike the LRP, whose kink makes it stepped). Competing
+  ## minima are still reported when they occur.
+  local_minima <- NULL
+  fin <- is.finite(ss_profile)
+  if (sum(fin) > 3) {
+    gg <- grid[fin]; pp <- ss_profile[fin]
+    dsign <- sign(diff(pp)); dsign[dsign == 0] <- 1
+    idx <- which(diff(dsign) == 2) + 1
+    if (length(idx)) {
+      lm_x0 <- gg[idx]; lm_ss <- pp[idx]
+      keep <- abs(lm_x0 - x0) > 10 * step
+      lm_x0 <- lm_x0[keep]; lm_ss <- lm_ss[keep]
+      if (length(lm_x0)) {
+        ord <- order(lm_ss)
+        local_minima <- data.frame(
+          breakpoint = lm_x0[ord], SSE = lm_ss[ord],
+          SSE_excess = lm_ss[ord] / ss_best - 1, row.names = NULL)
+      }
+    }
+  }
+
+  ## ---- optional compatibility fit ------------------------------------------
+  compat <- NULL
+  if (!is.null(start)) {
+    if (!is.numeric(start) || length(start) != 1 || is.na(start))
+      stop("`start` must be a single numeric breakpoint value.", call. = FALSE)
+    if (start < min(x) || start > max(x))
+      stop(sprintf("`start` must fall within the data range [%.4g, %.4g].",
+                   min(x), max(x)), call. = FALSE)
+    i <- which.min(abs(grid - start))
+    repeat {
+      lo <- if (i > 1) ss_profile[i - 1] else Inf
+      hi <- if (i < length(grid)) ss_profile[i + 1] else Inf
+      cur <- ss_profile[i]
+      if (!is.finite(cur)) { i <- i + 1; next }
+      if (is.finite(lo) && lo < cur) { i <- i - 1
+      } else if (is.finite(hi) && hi < cur) { i <- i + 1
+      } else break
+    }
+    cs <- ss_at(grid[i])
+    compat <- list(start = start, breakpoint = grid[i],
+                   plateau = cs$A, SSE = cs$ss,
+                   SSE_excess = cs$ss / ss_best - 1)
+  }
   a <- A + cc * x0^2; b <- -2 * cc * x0; c_par <- cc
   breakpoint <- x0; plateau <- A
 
@@ -92,6 +140,17 @@
             "supplied `search_range`) may not bracket the true breakpoint.",
             call. = FALSE)
 
+  if (!is.null(local_minima) &&
+      any(local_minima$SSE_excess <= local_min_tol)) {
+    j <- which(local_minima$SSE_excess <= local_min_tol)[1]
+    warning(sprintf(paste0("Competing local minimum at breakpoint %.3f ",
+                           "(SSE %.1f%% above the optimum at %.3f). The ",
+                           "breakpoint is not sharply identified; see ",
+                           "$local_minima and consider `search_range`."),
+                    local_minima$breakpoint[j],
+                    100 * local_minima$SSE_excess[j], x0), call. = FALSE)
+  }
+
   structure(
     list(
       coefficients = c(a = a, b = b, c = c_par),
@@ -100,7 +159,9 @@
                        AIC = aic, BIC = bic, SSE = sse, MSE = mse),
       fitted = fitted, residuals = residuals,
       data = data.frame(x = x, cv = cv), step = step,
-      search_range = search_range
+      search_range = search_range,
+      local_minima = local_minima, compat = compat,
+      sse_profile = data.frame(breakpoint = grid, SSE = ss_profile)
     ),
     class = "qrp_fit"
   )
@@ -133,7 +194,19 @@
 #' @param step grid step for the breakpoint search (default 0.001).
 #' @param search_range optional \code{c(lower, upper)} restricting the breakpoint
 #'   search; must fall within the data range.
+#' @param start optional single breakpoint value. The fit is unchanged, but the
+#'   result also carries \code{$compat}: the local minimum of the basin
+#'   containing \code{start}, i.e. what a gradient-based fitter seeded there
+#'   would return. Rarely needed for the QRP, whose SSE profile is usually a
+#'   single smooth basin.
+#' @param local_min_tol relative SSE tolerance (default 0.10) for warning about
+#'   a competing local minimum.
 #' @return A \code{"qrp_fit"} (single series) or \code{"qrp_multi"} (per trial).
+#'   The fit also carries \code{local_minima} (competing basins with their SSE
+#'   excess over the optimum, or \code{NULL}), \code{sse_profile}, and
+#'   \code{compat} when \code{start} was given. Because the quadratic-plateau
+#'   joins smoothly, this profile is typically a single basin, unlike the
+#'   stepped profile of [fit_lrp()].
 #' @seealso [fit_lrp()], [plot.qrp_fit()]
 #' @examples
 #' X   <- c(1, 2, 2, 3, 3, 4, 6, 6, 6, 6, 9, 12, 12, 18, 18)
@@ -143,7 +216,8 @@
 #' fit
 #' @export
 fit_qrp <- function(.data = NULL, x = NULL, cv = NULL, trial = NULL,
-                    step = 0.001, search_range = NULL) {
+                    step = 0.001, search_range = NULL, start = NULL,
+                    local_min_tol = 0.10) {
 
   if (!is.null(.data) && !is.data.frame(.data)) {
     cv <- x; x <- .data; .data <- NULL
@@ -153,7 +227,7 @@ fit_qrp <- function(.data = NULL, x = NULL, cv = NULL, trial = NULL,
     if (is.null(x) || is.null(cv))
       stop("Provide numeric `x` and `cv`, or a data frame as `.data`.",
            call. = FALSE)
-    return(.qrp_fit_one(x, cv, step, search_range))
+    return(.qrp_fit_one(x, cv, step, search_range, start, local_min_tol))
   }
 
   if (!is.data.frame(.data)) stop("`.data` must be a data frame.", call. = FALSE)
@@ -169,7 +243,8 @@ fit_qrp <- function(.data = NULL, x = NULL, cv = NULL, trial = NULL,
 
   if (is.null(trial)) {
     message(sprintf("Using x = '%s', cv = '%s' (single series).", xcol, cvcol))
-    return(.qrp_fit_one(.data[[xcol]], .data[[cvcol]], step, search_range))
+    return(.qrp_fit_one(.data[[xcol]], .data[[cvcol]], step, search_range,
+                        start, local_min_tol))
   }
 
   groups <- split(.data, .data[[trial]])
@@ -177,7 +252,8 @@ fit_qrp <- function(.data = NULL, x = NULL, cv = NULL, trial = NULL,
                   xcol, cvcol, trial, length(groups)))
 
   fits <- lapply(groups, function(g) .qrp_fit_one(g[[xcol]], g[[cvcol]],
-                                                  step, search_range))
+                                                  step, search_range, start,
+                                                  local_min_tol))
   summ <- do.call(rbind, Map(function(f, nm) data.frame(
     trial      = nm,
     a          = round(unname(f$coefficients["a"]), 4),
@@ -189,6 +265,7 @@ fit_qrp <- function(.data = NULL, x = NULL, cv = NULL, trial = NULL,
     RMSE       = round(unname(f$parameters["RMSE"]), 4),
     AIC        = round(unname(f$parameters["AIC"]), 3),
     BIC        = round(unname(f$parameters["BIC"]), 3),
+    n_local    = if (is.null(f$local_minima)) 0L else nrow(f$local_minima),
     stringsAsFactors = FALSE), fits, names(fits)))
   rownames(summ) <- NULL
 
@@ -219,6 +296,20 @@ print.qrp_fit <- function(x, ...) {
       " R2 adj:", sprintf("%.3f", x$parameters["R2_adj"]),
       " RMSE:", sprintf("%.3f", x$parameters["RMSE"]),
       " MAE:", sprintf("%.3f", x$parameters["MAE"]), "\n")
+
+  if (!is.null(x$local_minima)) {
+    lmin <- x$local_minima
+    cat("\nCompeting local minima (", nrow(lmin), "):\n", sep = "")
+    show <- utils::head(lmin, 3)
+    for (i in seq_len(nrow(show)))
+      cat(sprintf("  Xo = %7.3f   SSE %+6.1f%% vs optimum\n",
+                  show$breakpoint[i], 100 * show$SSE_excess[i]))
+    if (nrow(lmin) > 3) cat("  ... see $local_minima for all\n")
+  }
+  if (!is.null(x$compat))
+    cat(sprintf("\nCompatibility fit (start = %.3f): Xo = %.3f, SSE %+.1f%%\n",
+                x$compat$start, x$compat$breakpoint,
+                100 * x$compat$SSE_excess))
   invisible(x)
 }
 

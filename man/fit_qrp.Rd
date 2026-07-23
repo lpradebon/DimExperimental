@@ -10,7 +10,9 @@ fit_qrp(
   cv = NULL,
   trial = NULL,
   step = 0.001,
-  search_range = NULL
+  search_range = NULL,
+  start = NULL,
+  local_min_tol = 0.1
 )
 }
 \arguments{
@@ -25,9 +27,23 @@ are column names.}
 
 \item{search_range}{optional \code{c(lower, upper)} restricting the breakpoint
 search; must fall within the data range.}
+
+\item{start}{optional single breakpoint value. The fit is unchanged, but the
+result also carries \code{$compat}: the local minimum of the basin
+containing \code{start}, i.e. what a gradient-based fitter seeded there
+would return. Rarely needed for the QRP, whose SSE profile is usually a
+single smooth basin.}
+
+\item{local_min_tol}{relative SSE tolerance (default 0.10) for warning about
+a competing local minimum.}
 }
 \value{
 A \code{"qrp_fit"} (single series) or \code{"qrp_multi"} (per trial).
+  The fit also carries \code{local_minima} (competing basins with their SSE
+  excess over the optimum, or \code{NULL}), \code{sse_profile}, and
+  \code{compat} when \code{start} was given. Because the quadratic-plateau
+  joins smoothly, this profile is typically a single basin, unlike the
+  stepped profile of [fit_lrp()].
 }
 \description{
 Fits the quadratic-plateau (smooth broken-line) model

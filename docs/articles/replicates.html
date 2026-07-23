@@ -214,13 +214,13 @@ m² and
 <span><span class="co">#&gt;           3       9.25          20  0.05    CRD         3.56         4        9</span></span>
 <span><span class="co">#&gt;          10       9.25          20  0.05    CRD         4.82         5       40</span></span>
 <span><span class="co">#&gt;          50       9.25          20  0.05    CRD         6.97         7      300</span></span>
-<span><span class="co">#&gt;  q_tukey converged</span></span>
-<span><span class="co">#&gt;    3.486      TRUE</span></span>
-<span><span class="co">#&gt;    4.534      TRUE</span></span>
-<span><span class="co">#&gt;    5.660      TRUE</span></span>
-<span><span class="co">#&gt;    3.948      TRUE</span></span>
-<span><span class="co">#&gt;    4.735      TRUE</span></span>
-<span><span class="co">#&gt;    5.709      TRUE</span></span></code></pre></div>
+<span><span class="co">#&gt;  q_tukey converged at_floor</span></span>
+<span><span class="co">#&gt;    3.486      TRUE    FALSE</span></span>
+<span><span class="co">#&gt;    4.534      TRUE    FALSE</span></span>
+<span><span class="co">#&gt;    5.660      TRUE    FALSE</span></span>
+<span><span class="co">#&gt;    3.948      TRUE    FALSE</span></span>
+<span><span class="co">#&gt;    4.735      TRUE    FALSE</span></span>
+<span><span class="co">#&gt;    5.709      TRUE    FALSE</span></span></code></pre></div>
 <p>Reading the first row: with 3 treatments and a CV of 9.25%, detecting
 a difference of 10% of the mean needs 10.46 replications in theory, so
 11 in practice. The published table gives 10.46 for that cell.</p>
@@ -285,6 +285,9 @@ Fitting the chickpea trial and feeding the result straight through:</p>
 <span>         <span class="fl">17.58</span>, <span class="fl">14.94</span>, <span class="fl">11.93</span>, <span class="fl">3.18</span>, <span class="fl">8.63</span>, <span class="fl">4.25</span>, <span class="fl">11.41</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">lrp</span>  <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fit_lrp.html">fit_lrp</a></span><span class="op">(</span><span class="va">X</span>, <span class="va">CV1</span><span class="op">)</span></span>
+<span><span class="co">#&gt; Warning: Competing local minimum at breakpoint 9.280 (SSE 7.5% above the</span></span>
+<span><span class="co">#&gt; optimum at 7.436). The breakpoint is not sharply identified; see $local_minima</span></span>
+<span><span class="co">#&gt; and consider `search_range`.</span></span>
 <span><span class="va">cvxo</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/unname.html" class="external-link">unname</a></span><span class="op">(</span><span class="va">lrp</span><span class="op">$</span><span class="va">parameters</span><span class="op">[</span><span class="st">"Breakpoint_Response"</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="va">cvxo</span></span>
 <span><span class="co">#&gt; [1] 7.880598</span></span>

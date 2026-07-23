@@ -89,7 +89,9 @@ avoids the starting-value sensitivity and local-minima of a direct
 <span>  trial <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  step <span class="op">=</span> <span class="fl">0.001</span>,</span>
 <span>  method <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"segment"</span>, <span class="st">"ramp"</span><span class="op">)</span>,</span>
-<span>  search_range <span class="op">=</span> <span class="cn">NULL</span></span>
+<span>  search_range <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  start <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  local_min_tol <span class="op">=</span> <span class="fl">0.1</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -133,13 +135,31 @@ within the data range. Useful when the optimum is known to lie in a region
 and an outlier could otherwise pull the breakpoint outside it. <code>NULL</code>
 (default) searches the full feasible interval.</p></dd>
 
+
+<dt id="arg-start">start<a class="anchor" aria-label="anchor" href="#arg-start"></a></dt>
+<dd><p>optional single breakpoint value. The fit is unchanged, but the
+result also carries a <code>$compat</code> element holding the local minimum of
+the basin containing <code>start</code>: the solution a gradient-based fitter
+(<code>nls</code>, <code>nlsLM</code>) seeded there would return. Use it to reproduce
+published results obtained with such implementations, and to see how much
+worse they fit.</p></dd>
+
+
+<dt id="arg-local-min-tol">local_min_tol<a class="anchor" aria-label="anchor" href="#arg-local-min-tol"></a></dt>
+<dd><p>relative SSE tolerance (default 0.10) for warning about
+a competing local minimum. A second basin fitting within 10% of the
+optimum means the breakpoint is not sharply identified.</p></dd>
+
 </dl></div>
     <div id="value">
     <h2>Value</h2>
     <p>For a single series, an object of class <code>"lrp_fit"</code>: a list with
 <code>coefficients</code> (a, b); <code>parameters</code> (Breakpoint, Breakpoint_Response,
 R2, RMSE, AIC, BIC); <code>fitted</code>; <code>residuals</code>; <code>data</code>;
-<code>method</code>; <code>step</code>. <br>
+<code>method</code>; <code>step</code>; <code>local_minima</code> (competing basins, with
+their SSE excess over the optimum, or <code>NULL</code>); <code>sse_profile</code> (the
+SSE at every candidate breakpoint); and <code>compat</code> when <code>start</code> was
+given. <br>
 With <code>trial</code>, an object of class <code>"lrp_multi"</code>: a list with
 <code>summary</code> (one row per trial), <code>fits</code> (the individual
 <code>"lrp_fit"</code> objects) and <code>method</code>.</p>
@@ -149,6 +169,19 @@ With <code>trial</code>, an object of class <code>"lrp_multi"</code>: a list wit
     <p>The response is typically the coefficient of variation (CV, percent) and the
 predictor the plot size. Supply the individual CV values (one per basic-unit
 form), not the means per plot size; repeated <code>x</code> values are expected.</p>
+    </div>
+    <div id="competing-breakpoints">
+    <h2>Competing breakpoints</h2>
+
+
+<p>With few distinct plot sizes the residual sum of squares is a stepped
+function of the breakpoint, and it often has several local minima. The grid
+search always returns the global optimum, but a second basin may fit almost
+as well, in which case the breakpoint is not sharply identified and different
+implementations legitimately disagree. Any competing minima are reported in
+<code>$local_minima</code>, and a warning is issued when one of them fits within
+<code>local_min_tol</code> of the optimum. Gradient-based fitters return whichever
+basin their starting value lands in; <code>start</code> reproduces that.</p>
     </div>
     <div id="two-ways-to-call">
     <h2>Two ways to call</h2>
@@ -187,12 +220,19 @@ Cargnelutti Filho, A. et al. (2025). <em>Revista Vivencias</em>, 21(43), 499-513
 <span class="r-in"><span></span></span>
 <span class="r-in"><span><span class="co">## Vector interface (single series)</span></span></span>
 <span class="r-in"><span><span class="va">fit</span> <span class="op">&lt;-</span> <span class="fu">fit_lrp</span><span class="op">(</span><span class="va">X</span>, <span class="va">CV1</span><span class="op">)</span></span></span>
+<span class="r-wrn co"><span class="r-pr">#&gt;</span> <span class="warning">Warning: </span>Competing local minimum at breakpoint 9.280 (SSE 7.5% above the optimum at 7.436). The breakpoint is not sharply identified; see $local_minima and consider `search_range`.</span>
 <span class="r-in"><span><span class="va">fit</span></span></span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> Linear Response Plateau (LRP) fit</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> Method:                  segment </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> Breakpoint (Xo):         7.436 </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> CV at breakpoint:        7.881 </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> R2: 0.715  RMSE: 3.857  AIC: 91.1  BIC: 93.9 </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> Competing local minima (5):</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   Xo =   9.280   SSE   +7.5% vs optimum</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   Xo =   4.874   SSE  +11.2% vs optimum</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   Xo =   3.928   SSE  +21.5% vs optimum</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   ... see $local_minima for all</span>
 <span class="r-in"><span></span></span>
 <span class="r-in"><span><span class="co">## Data-frame interface with one model per trial</span></span></span>
 <span class="r-in"><span><span class="va">df</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/cbind.html" class="external-link">rbind</a></span><span class="op">(</span></span></span>
@@ -201,10 +241,12 @@ Cargnelutti Filho, A. et al. (2025). <em>Revista Vivencias</em>, 21(43), 499-513
 <span class="r-in"><span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="va">res</span> <span class="op">&lt;-</span> <span class="fu">fit_lrp</span><span class="op">(</span><span class="va">df</span>, x <span class="op">=</span> <span class="st">"x"</span>, cv <span class="op">=</span> <span class="st">"cv"</span>, trial <span class="op">=</span> <span class="st">"trial"</span><span class="op">)</span></span></span>
 <span class="r-msg co"><span class="r-pr">#&gt;</span> Using x = 'x', cv = 'cv', trial = 'trial' -&gt; 2 trials.</span>
+<span class="r-wrn co"><span class="r-pr">#&gt;</span> <span class="warning">Warning: </span>Competing local minimum at breakpoint 9.280 (SSE 7.5% above the optimum at 7.436). The breakpoint is not sharply identified; see $local_minima and consider `search_range`.</span>
+<span class="r-wrn co"><span class="r-pr">#&gt;</span> <span class="warning">Warning: </span>Competing local minimum at breakpoint 9.280 (SSE 7.5% above the optimum at 7.436). The breakpoint is not sharply identified; see $local_minima and consider `search_range`.</span>
 <span class="r-in"><span><span class="va">res</span><span class="op">$</span><span class="va">summary</span></span></span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>   trial       a       b breakpoint plateau     R2   RMSE    AIC   BIC</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 1    T1 28.0066 -2.7066      7.436  7.8806 0.7154 3.8574 91.068 93.90</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 2    T2 30.8072 -2.9772      7.436  8.6687 0.7154 4.2432 93.927 96.76</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   trial       a       b breakpoint plateau     R2   RMSE    AIC   BIC n_local</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 1    T1 28.0066 -2.7066      7.436  7.8806 0.7154 3.8574 91.068 93.90       5</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 2    T2 30.8072 -2.9772      7.436  8.6687 0.7154 4.2432 93.927 96.76       5</span>
 <span class="r-in"><span></span></span>
 </code></pre></div>
     </div>
