@@ -2,98 +2,78 @@
 % Please edit documentation in R/calc_paranaiba.R
 \name{calc_paranaiba}
 \alias{calc_paranaiba}
-\title{Estimate optimal plot size using the Paranaiba method}
+\title{Optimal plot size by the Paranaiba method}
 \usage{
 calc_paranaiba(
-  data,
-  n_row,
-  n_col,
-  n_rep,
-  start_col = 4,
-  digits = 2,
-  plot_title = NULL,
-  base_size = 14,
-  font_family = "sans"
+  .data,
+  value = NULL,
+  row_id = NULL,
+  col_id = NULL,
+  trial = NULL,
+  n_row = NULL,
+  n_col = NULL,
+  rho_direction = c("row", "col", "mean")
 )
 }
 \arguments{
-\item{data}{A data frame or tibble with the raw uniformity trial data.
-Each row represents one basic experimental unit (BEU). The initial
-columns should hold spatial identification (e.g. row, column,
-replication), followed by the quantitative variable of interest.}
+\item{.data}{a matrix, a list of matrices, or a data frame.}
 
-\item{n_row}{Integer. Number of rows in the trial (longitudinal
-direction), i.e. the number of basic units along the crop rows.}
+\item{value}{name of the column holding the BEU measurement (long format).}
 
-\item{n_col}{Integer. Number of columns in the trial (transversal
-direction), i.e. the number of basic units along the experiment width.}
+\item{row_id, col_id}{names of the row and column index columns (long format).}
 
-\item{n_rep}{Integer. Number of simulated replications/splits of the
-trial used to compute the between-plot variability statistics.}
+\item{trial}{optional column name identifying the trial.}
 
-\item{start_col}{Integer, optional. Column index in \code{data} where
-the quantitative variable of interest starts; preceding columns are
-treated as metadata. Default \code{4}.}
+\item{n_row, n_col}{grid dimensions; required only for a matrix supplied as a
+plain vector, or to check the grid of a long data frame.}
 
-\item{digits}{Integer, optional. Number of decimal places used when
-rounding the reported results. Default \code{2}.}
-
-\item{plot_title}{Character string used as the plot title. Default
-\code{NULL}.}
-
-\item{base_size}{Base font size for the plot theme. Default \code{14}.}
-
-\item{font_family}{Font family for all plot text. Default \code{"sans"}.}
+\item{rho_direction}{\code{"row"} (default), \code{"col"} or \code{"mean"}.}
 }
 \value{
-An object of class \code{paranaiba_fit}, a list with:
-\describe{
-  \item{call}{The matched call.}
-  \item{data}{A data frame with one row per replication: \code{Repetition},
-    \code{Mean}, \code{Rho_row}, \code{Rho_col}, \code{Rho_mean},
-    \code{Optimal_size}, \code{CV_percent}, \code{CV_optimal}, \code{valid}.}
-  \item{plot}{A ggplot2 object showing optimal plot size by replication.
-    Not printed automatically.}
-}
+An object of class \code{"paranaiba_fit"}: a list with \code{summary}
+  (one row per trial: mean, variance, CV, rho_row, rho_col, rho, Xo, CVxo,
+  valid) and \code{meta}.
 }
 \description{
-Estimates the optimal plot size for agricultural experiments using the
-maximum curvature method as a function of the coefficient of variation,
-following Paranaiba, Ferreira & Morais (2009). The method uses the
-spatial layout of a uniformity trial (rows and columns of basic
-experimental units) to estimate the spatial correlation between
-neighboring units, and from that, the optimal plot size.
+Estimates the optimal plot size from the raw uniformity-trial grid using the
+maximum curvature of the coefficient of variation model (Paranaiba, Ferreira
+& Morais, 2009). Unlike [fit_lrp()], [fit_qrp()] and [fit_mcm()], which take
+CV values already computed for several plot sizes, this method works directly
+on the basic experimental units (BEU) and returns a closed-form estimate:
+\deqn{X_o = \frac{10 \sqrt[3]{2 (1 - \rho^2) s^2 m}}{m}, \qquad
+      CV_{Xo} = \frac{100 \sqrt{(1 - \rho^2) s^2 / m^2}}{\sqrt{X_o}}}
+where \eqn{m} and \eqn{s^2} are the mean and variance of the BEU values and
+\eqn{\rho} is the first-order spatial autocorrelation.
 }
-\details{
-The Paranaiba method is based on the relationship between the
-coefficient of variation and plot size, allowing the estimation of the
-optimal plot size and its associated experimental variability. The
-function uses the spatial structure defined by \code{n_row} and
-\code{n_col} to simulate aggregations of basic experimental units,
-walking a serpentine path across rows and columns to estimate the
-spatial autocorrelation (\code{rho}).
+\section{Direction of the autocorrelation}{
 
-If a given replication has zero variance (a degenerate block), its
-\code{rho}, optimal size, and optimal CV are returned as \code{NA} and a
-warning is issued, rather than silently propagating \code{NaN}.
+\eqn{\rho} is estimated along a serpentine walk through the grid. The original
+method walks in the direction of the rows (\code{rho_direction = "row"},
+the default). \code{"col"} walks down the columns and \code{"mean"} averages
+both directions; these can give visibly different \eqn{\rho} and so a
+different \eqn{X_o}.
 }
+
+\section{Input}{
+
+Supply either a matrix (one trial), a list of matrices (several trials), or a
+data frame in long format with the value column plus row/column indices, or a
+data frame whose \code{n_col} value columns hold the grid (see \code{value},
+\code{row_id}, \code{col_id}, \code{trial}).
+}
+
 \examples{
-\dontrun{
-fit <- calc_paranaiba(
-  data      = trial_data,
-  n_row     = 6,
-  n_col     = 8,
-  n_rep     = 3,
-  start_col = 4,
-  digits    = 3
-)
-fit
-plot(fit)
-}
-
+set.seed(1)
+grid <- matrix(rnorm(36, 250, 60), nrow = 6)
+calc_paranaiba(grid)
 }
 \references{
-Paranaiba, P. F.; Ferreira, D. F.; Morais, A. R. (2009). Tamanho otimo de
-parcelas experimentais: proposicao de metodos de estimacao. Revista
-Brasileira de Biometria, 27:255-268.
+Paranaiba, P. F., Ferreira, D. F. & Morais, A. R. (2009). Tamanho otimo de
+parcelas experimentais: proposicao de metodos de estimacao. \emph{Revista
+Brasileira de Biometria}, 27(2), 255-268. \cr
+Cargnelutti Filho, A. et al. (2014). Tamanho de parcela e numero de
+repeticoes em aveia preta. \emph{Ciencia Rural}, 44(10), 1732-1739.
+}
+\seealso{
+[fit_lrp()], [fit_mcm()], [calc_replicates()]
 }

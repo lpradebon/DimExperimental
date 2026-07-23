@@ -25,10 +25,13 @@ of replications, with standardized diagnostic statistics and plots:
 - `calc_replicates()`: optimal number of replications (Cargnelutti Filho
   et al., 2014)
 
-The three plot-size functions share the same interface (numeric vectors
-or a data frame with a trial column), return standardized fit
-statistics, and produce publication-style plots that can be saved
-directly to TIFF, PDF or PNG.
+`fit_lrp()`, `fit_qrp()` and `fit_mcm()` share the same interface
+(numeric vectors, or a data frame with a trial column) and take CV
+values already computed for several plot sizes. `calc_paranaiba()` is
+different: it works directly on the raw grid of basic experimental units
+and returns a closed-form estimate. All of them return standardized
+statistics and publication-style plots that can be saved to TIFF, PDF or
+PNG.
 
 ## Installation
 
@@ -83,8 +86,7 @@ plot(fit, title = "Uniformity trial example",
 
 ## Comparing plot-size methods
 
-The Linear Response Plateau, Quadratic Response Plateau and Modified
-Maximum Curvature methods are called the same way and often give
+The three CV-based methods are called the same way and often give
 different optima. The optimal plot size typically increases in the order
 MCM \< LRP \< QRP:
 
@@ -108,6 +110,19 @@ data.frame(
 #> 2    LRP  8.648000  7.940117
 #> 3    QRP 12.311000  7.766405
 ```
+
+Because every `plot()` method returns a `ggplot` object, the three fits
+can be shown side by side with `patchwork`:
+
+``` r
+library(patchwork)
+
+plot(mcm, title = "MCM", label_size = 3) +
+  plot(lrp, title = "LRP", label_size = 3) +
+  plot(qrp, title = "QRP", label_size = 3)
+```
+
+<img src="man/figures/README-compare-plot-1.png" alt="" width="100%" />
 
 ### Several trials at once
 
@@ -133,6 +148,41 @@ If the optimum is known to lie in a given region, restrict the
 breakpoint search with `search_range`, for example
 `fit_lrp(x = plot_size, cv = cv, search_range = c(5, 20))`.
 
+## The Paranaiba method
+
+`calc_paranaiba()` starts from the raw uniformity trial: a grid of basic
+experimental units. It estimates the first-order spatial autocorrelation
+along a serpentine walk and returns the optimal plot size in closed
+form. Supply one matrix, a list of matrices, or a long data frame with
+row and column indices:
+
+``` r
+set.seed(42)
+grid_a <- matrix(rnorm(36, mean = 250, sd = 55), nrow = 6)
+grid_b <- matrix(rnorm(36, mean = 300, sd = 80), nrow = 6)
+
+par_fit <- calc_paranaiba(list(`Trial A` = grid_a, `Trial B` = grid_b))
+#> Paranaiba method on 2 trial(s); rho direction = 'row'.
+par_fit
+#> Paranaiba optimal plot size
+#> Trials: 2  | rho direction: row  | invalid: 0 
+#> 
+#>    trial    mean variance     CV rho_row rho_col    rho    Xo   CVxo valid
+#>  Trial A 253.716 4408.216 26.169  -0.163  -0.224 -0.163 5.109 11.423  TRUE
+#>  Trial B 300.502 6476.482 26.781   0.141  -0.032  0.141 5.200 11.627  TRUE
+#> 
+#> Mean Xo: 5.15  |  Mean CVxo: 11.53
+```
+
+The walk follows the rows by default, as in the original method; use
+`rho_direction = "col"` or `"mean"` for the alternatives.
+
+``` r
+plot(par_fit, title = "Paranaiba: optimal plot size")
+```
+
+<img src="man/figures/README-paranaiba-plot-1.png" alt="" width="100%" />
+
 ## Number of replications
 
 The CV at the optimal plot size feeds directly into the number of
@@ -143,7 +193,7 @@ replications needed to detect a given difference between treatment means
 cvxo <- unname(lrp$parameters["Breakpoint_Response"])
 
 reps <- calc_replicates(
-  treatments  = c(3, 5, 10, 20),
+  treatments  = 3:30,
   cv_percent  = cvxo,
   lsd_percent = c(10, 20, 30),
   design      = "CRD"
@@ -151,26 +201,33 @@ reps <- calc_replicates(
 reps
 #> Optimal number of replications
 #> Design: CRD  CV: 7.94%  alpha: 0.05 
-#> Rows: 12  | Non-converged: 0 
+#> Rows: 84  | Non-converged: 0 
 #> 
 #>  Treatments CV_percent LSD_percent Alpha Design r_continuous r_optimal df_error
 #>           3   7.940117          10  0.05    CRD         8.01         9       24
+#>           4   7.940117          10  0.05    CRD         9.23        10       36
 #>           5   7.940117          10  0.05    CRD        10.17        11       50
-#>          10   7.940117          10  0.05    CRD        13.10        14      130
-#>          20   7.940117          10  0.05    CRD        16.12        17      320
-#>           3   7.940117          20  0.05    CRD         2.98         3        6
-#>           5   7.940117          20  0.05    CRD         3.26         4       15
+#>           6   7.940117          10  0.05    CRD        10.93        11       60
+#>           7   7.940117          10  0.05    CRD        11.58        12       77
+#>           8   7.940117          10  0.05    CRD        12.15        13       96
 #>  q_tukey converged
 #>    3.532      TRUE
+#>    3.809      TRUE
 #>    4.002      TRUE
-#>    4.553      TRUE
-#>    5.054      TRUE
-#>    4.339      TRUE
-#>    4.367      TRUE
+#>    4.163      TRUE
+#>    4.282      TRUE
+#>    4.382      TRUE
 ```
 
 The output reports both `r_continuous` (the tabulated value) and
-`r_optimal` (the practical integer, at least 2).
+`r_optimal` (the practical integer, at least 2). Plotting shows how the
+requirement grows with the number of treatments, one line per LSD level:
+
+``` r
+plot(reps, title = "Replications needed")
+```
+
+<img src="man/figures/README-replicates-plot-1.png" alt="" width="100%" />
 
 ## Citation
 

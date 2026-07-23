@@ -37,10 +37,12 @@ plots:
 - `calc_replicates()`: optimal number of replications (Cargnelutti
   Filho et al., 2014)
 
-The three plot-size functions share the same interface (numeric vectors
-or a data frame with a trial column), return standardized fit statistics,
-and produce publication-style plots that can be saved directly to TIFF,
-PDF or PNG.
+`fit_lrp()`, `fit_qrp()` and `fit_mcm()` share the same interface
+(numeric vectors, or a data frame with a trial column) and take CV values
+already computed for several plot sizes. `calc_paranaiba()` is different:
+it works directly on the raw grid of basic experimental units and returns
+a closed-form estimate. All of them return standardized statistics and
+publication-style plots that can be saved to TIFF, PDF or PNG.
 
 ## Installation
 
@@ -88,8 +90,7 @@ plot(fit, title = "Uniformity trial example",
 
 ## Comparing plot-size methods
 
-The Linear Response Plateau, Quadratic Response Plateau and Modified
-Maximum Curvature methods are called the same way and often give
+The three CV-based methods are called the same way and often give
 different optima. The optimal plot size typically increases in the order
 MCM < LRP < QRP:
 
@@ -108,6 +109,17 @@ data.frame(
            qrp$parameters["Breakpoint_Response"]),
   row.names = NULL
 )
+```
+
+Because every `plot()` method returns a `ggplot` object, the three fits
+can be shown side by side with `patchwork`:
+
+```{r compare-plot, fig.width = 12, fig.height = 4}
+library(patchwork)
+
+plot(mcm, title = "MCM", label_size = 3) +
+  plot(lrp, title = "LRP", label_size = 3) +
+  plot(qrp, title = "QRP", label_size = 3)
 ```
 
 ### Several trials at once
@@ -130,6 +142,30 @@ If the optimum is known to lie in a given region, restrict the
 breakpoint search with `search_range`, for example
 `fit_lrp(x = plot_size, cv = cv, search_range = c(5, 20))`.
 
+## The Paranaiba method
+
+`calc_paranaiba()` starts from the raw uniformity trial: a grid of basic
+experimental units. It estimates the first-order spatial autocorrelation
+along a serpentine walk and returns the optimal plot size in closed form.
+Supply one matrix, a list of matrices, or a long data frame with row and
+column indices:
+
+```{r paranaiba}
+set.seed(42)
+grid_a <- matrix(rnorm(36, mean = 250, sd = 55), nrow = 6)
+grid_b <- matrix(rnorm(36, mean = 300, sd = 80), nrow = 6)
+
+par_fit <- calc_paranaiba(list(`Trial A` = grid_a, `Trial B` = grid_b))
+par_fit
+```
+
+The walk follows the rows by default, as in the original method; use
+`rho_direction = "col"` or `"mean"` for the alternatives.
+
+```{r paranaiba-plot, fig.width = 6.5, fig.height = 4.2}
+plot(par_fit, title = "Paranaiba: optimal plot size")
+```
+
 ## Number of replications
 
 The CV at the optimal plot size feeds directly into the number of
@@ -140,7 +176,7 @@ replications needed to detect a given difference between treatment means
 cvxo <- unname(lrp$parameters["Breakpoint_Response"])
 
 reps <- calc_replicates(
-  treatments  = c(3, 5, 10, 20),
+  treatments  = 3:30,
   cv_percent  = cvxo,
   lsd_percent = c(10, 20, 30),
   design      = "CRD"
@@ -149,7 +185,12 @@ reps
 ```
 
 The output reports both `r_continuous` (the tabulated value) and
-`r_optimal` (the practical integer, at least 2).
+`r_optimal` (the practical integer, at least 2). Plotting shows how the
+requirement grows with the number of treatments, one line per LSD level:
+
+```{r replicates-plot, fig.width = 6.8, fig.height = 4.4}
+plot(reps, title = "Replications needed")
+```
 
 ## Citation
 

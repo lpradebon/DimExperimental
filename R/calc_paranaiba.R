@@ -1,227 +1,287 @@
-#' Estimate optimal plot size using the Paranaiba method
-#'
-#' @description
-#' Estimates the optimal plot size for agricultural experiments using the
-#' maximum curvature method as a function of the coefficient of variation,
-#' following Paranaiba, Ferreira & Morais (2009). The method uses the
-#' spatial layout of a uniformity trial (rows and columns of basic
-#' experimental units) to estimate the spatial correlation between
-#' neighboring units, and from that, the optimal plot size.
-#'
-#' @param data A data frame or tibble with the raw uniformity trial data.
-#'   Each row represents one basic experimental unit (BEU). The initial
-#'   columns should hold spatial identification (e.g. row, column,
-#'   replication), followed by the quantitative variable of interest.
-#' @param n_row Integer. Number of rows in the trial (longitudinal
-#'   direction), i.e. the number of basic units along the crop rows.
-#' @param n_col Integer. Number of columns in the trial (transversal
-#'   direction), i.e. the number of basic units along the experiment width.
-#' @param n_rep Integer. Number of simulated replications/splits of the
-#'   trial used to compute the between-plot variability statistics.
-#' @param start_col Integer, optional. Column index in \code{data} where
-#'   the quantitative variable of interest starts; preceding columns are
-#'   treated as metadata. Default \code{4}.
-#' @param digits Integer, optional. Number of decimal places used when
-#'   rounding the reported results. Default \code{2}.
-#' @param plot_title Character string used as the plot title. Default
-#'   \code{NULL}.
-#' @param base_size Base font size for the plot theme. Default \code{14}.
-#' @param font_family Font family for all plot text. Default \code{"sans"}.
-#'
-#' @details
-#' The Paranaiba method is based on the relationship between the
-#' coefficient of variation and plot size, allowing the estimation of the
-#' optimal plot size and its associated experimental variability. The
-#' function uses the spatial structure defined by \code{n_row} and
-#' \code{n_col} to simulate aggregations of basic experimental units,
-#' walking a serpentine path across rows and columns to estimate the
-#' spatial autocorrelation (\code{rho}).
-#'
-#' If a given replication has zero variance (a degenerate block), its
-#' \code{rho}, optimal size, and optimal CV are returned as \code{NA} and a
-#' warning is issued, rather than silently propagating \code{NaN}.
-#'
-#' @references
-#' Paranaiba, P. F.; Ferreira, D. F.; Morais, A. R. (2009). Tamanho otimo de
-#' parcelas experimentais: proposicao de metodos de estimacao. Revista
-#' Brasileira de Biometria, 27:255-268.
-#'
-#' @return An object of class \code{paranaiba_fit}, a list with:
-#' \describe{
-#'   \item{call}{The matched call.}
-#'   \item{data}{A data frame with one row per replication: \code{Repetition},
-#'     \code{Mean}, \code{Rho_row}, \code{Rho_col}, \code{Rho_mean},
-#'     \code{Optimal_size}, \code{CV_percent}, \code{CV_optimal}, \code{valid}.}
-#'   \item{plot}{A ggplot2 object showing optimal plot size by replication.
-#'     Not printed automatically.}
-#' }
-#'
-#' @examples
-#' \dontrun{
-#' fit <- calc_paranaiba(
-#'   data      = trial_data,
-#'   n_row     = 6,
-#'   n_col     = 8,
-#'   n_rep     = 3,
-#'   start_col = 4,
-#'   digits    = 3
-#' )
-#' fit
-#' plot(fit)
-#' }
-#'
-#' @export
-calc_paranaiba <- function(data,
-                           n_row,
-                           n_col,
-                           n_rep,
-                           start_col = 4,
-                           digits = 2,
-                           plot_title = NULL,
-                           base_size = 14,
-                           font_family = "sans") {
+## ============================================================================
+## DimExp :: Paranaiba method (maximum curvature of the CV model)
+## ----------------------------------------------------------------------------
+## Paranaiba, Ferreira & Morais (2009). From the raw uniformity-trial grid, the
+## first-order spatial autocorrelation (rho) is estimated along a serpentine
+## walk; the optimal plot size and its CV follow in closed form:
+##   Xo   = 10 * ( 2 (1 - rho^2) s^2 m )^(1/3) / m
+##   CVxo = 100 * sqrt( (1 - rho^2) s^2 / m^2 ) / sqrt(Xo)
+## with s^2 the variance and m the mean of the basic units.
+##
+## rho direction: the original method walks in the direction of the ROWS
+## ("no sentido das linhas"), which is the default here. "col" and "mean" are
+## offered for studies that walk down columns or average both directions.
+## Validated against Cargnelutti Filho et al. (2014), black oat, Table 1.
+## Uses the shared internal saver .save_lrp() defined in fit_lrp.R.
+## ============================================================================
 
-  call <- match.call()
-
-  # ---- Input validation ----
-  if (!is.data.frame(data)) {
-    stop("`data` must be a data frame or tibble.", call. = FALSE)
+## Internal: serpentine first-order autocorrelation ---------------------------
+.rho_serpentine <- function(mat, direction = "row") {
+  err <- mat - mean(mat)
+  ss  <- sum(err^2)
+  if (ss == 0) return(NA_real_)
+  walk <- c()
+  if (direction == "row") {
+    for (i in seq_len(nrow(mat)))
+      walk <- c(walk, if (i %% 2 == 1) err[i, ] else rev(err[i, ]))
+  } else {
+    for (j in seq_len(ncol(mat)))
+      walk <- c(walk, if (j %% 2 == 1) err[, j] else rev(err[, j]))
   }
-  if (start_col + n_col - 1 > ncol(data)) {
-    stop(sprintf(
-      "`start_col` + `n_col` - 1 = %d exceeds the number of columns in `data` (%d).",
-      start_col + n_col - 1, ncol(data)
-    ), call. = FALSE)
-  }
-  if (n_rep * n_row > nrow(data)) {
-    stop(sprintf(
-      "`n_rep` * `n_row` = %d exceeds the number of rows in `data` (%d).",
-      n_rep * n_row, nrow(data)
-    ), call. = FALSE)
-  }
-
-  # ---- Internal calculation for one block (one replication) ----
-  calc_block <- function(block, rep_id) {
-
-    block_mean <- mean(block)
-    block_sd   <- sd(block)
-    cv         <- (block_sd / block_mean) * 100
-
-    err   <- block - block_mean
-    ss    <- sum(err^2)
-    var1  <- block_sd^2
-
-    if (ss == 0) {
-      warning(sprintf("Replication %d has zero variance; rho and optimal size set to NA.", rep_id),
-              call. = FALSE)
-      return(data.frame(
-        Repetition = rep_id, Mean = block_mean, Rho_row = NA_real_,
-        Rho_col = NA_real_, Rho_mean = NA_real_, Optimal_size = NA_real_,
-        CV_percent = cv, CV_optimal = NA_real_, valid = FALSE
-      ))
-    }
-
-    # ---- Row-wise serpentine walk ----
-    err_row <- c()
-    for (i in seq_len(nrow(block))) {
-      if (i %% 2 == 1) {
-        err_row <- c(err_row, err[i, ])
-      } else {
-        err_row <- c(err_row, err[i, ncol(block):1])
-      }
-    }
-    rho_row <- sum(err_row[-1] * err_row[-length(err_row)]) / ss
-
-    # ---- Column-wise serpentine walk ----
-    err_col <- c()
-    for (j in seq_len(ncol(block))) {
-      if (j %% 2 == 1) {
-        err_col <- c(err_col, err[, j])
-      } else {
-        err_col <- c(err_col, err[nrow(block):1, j])
-      }
-    }
-    rho_col <- sum(err_col[-1] * err_col[-length(err_col)]) / ss
-
-    rho_mean <- mean(c(rho_row, rho_col))
-
-    optimal_size <- 10 * (2 * (1 - rho_mean^2) * var1 * block_mean)^(1 / 3) / block_mean
-
-    cv_optimal <- 100 *
-      sqrt((1 - rho_mean^2) * var1 / block_mean^2) /
-      sqrt(optimal_size)
-
-    data.frame(
-      Repetition = rep_id, Mean = block_mean, Rho_row = rho_row,
-      Rho_col = rho_col, Rho_mean = rho_mean, Optimal_size = optimal_size,
-      CV_percent = cv, CV_optimal = cv_optimal, valid = TRUE
-    )
-  }
-
-  # ---- Loop over replications ----
-  results <- vector("list", n_rep)
-
-  for (rep in seq_len(n_rep)) {
-
-    row_start <- (rep - 1) * n_row + 1
-    row_end   <- rep * n_row
-
-    block <- matrix(
-      unlist(data[row_start:row_end, start_col:(start_col + n_col - 1)]),
-      nrow = n_row,
-      ncol = n_col,
-      byrow = FALSE
-    )
-
-    results[[rep]] <- calc_block(block, rep_id = rep)
-  }
-
-  result_data <- do.call(rbind, results)
-  rownames(result_data) <- NULL
-
-  numeric_cols <- c("Mean", "Rho_row", "Rho_col", "Rho_mean", "Optimal_size",
-                    "CV_percent", "CV_optimal")
-  result_data[numeric_cols] <- lapply(result_data[numeric_cols], round, digits = digits)
-
-  # ---- Plot: optimal plot size by replication ----
-  g <- ggplot2::ggplot(result_data, ggplot2::aes(factor(Repetition), Optimal_size)) +
-    ggplot2::geom_col(fill = "steelblue", na.rm = TRUE) +
-    ggplot2::labs(
-      title = plot_title,
-      x = "Replication",
-      y = expression("Optimal plot size (" * m^2 * ")")
-    ) +
-    ggplot2::theme_classic(base_size = base_size, base_family = font_family) +
-    ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5))
-
-  # ---- Structured output ----
-  result <- list(
-    call = call,
-    data = result_data,
-    plot = g
-  )
-
-  class(result) <- "paranaiba_fit"
-  result
+  sum(walk[-1] * walk[-length(walk)]) / ss
 }
 
+## Internal: one trial --------------------------------------------------------
+.paranaiba_one <- function(mat, rho_direction, trial_id) {
+
+  m  <- mean(mat)
+  s2 <- stats::var(as.vector(mat))
+  cv <- 100 * sqrt(s2) / m
+
+  if (s2 == 0 || m == 0) {
+    warning(sprintf("Trial %s has zero variance or zero mean; results are NA.",
+                    trial_id), call. = FALSE)
+    return(data.frame(trial = trial_id, mean = m, variance = s2, CV = NA_real_,
+                      rho_row = NA_real_, rho_col = NA_real_, rho = NA_real_,
+                      Xo = NA_real_, CVxo = NA_real_, valid = FALSE,
+                      stringsAsFactors = FALSE))
+  }
+
+  rho_row <- .rho_serpentine(mat, "row")
+  rho_col <- .rho_serpentine(mat, "col")
+  rho <- switch(rho_direction,
+                row  = rho_row,
+                col  = rho_col,
+                mean = mean(c(rho_row, rho_col)))
+
+  Xo   <- 10 * (2 * (1 - rho^2) * s2 * m)^(1 / 3) / m
+  CVxo <- 100 * sqrt((1 - rho^2) * s2 / m^2) / sqrt(Xo)
+
+  data.frame(trial = trial_id, mean = m, variance = s2, CV = cv,
+             rho_row = rho_row, rho_col = rho_col, rho = rho,
+             Xo = Xo, CVxo = CVxo, valid = TRUE, stringsAsFactors = FALSE)
+}
+
+## Public function ------------------------------------------------------------
+#' Optimal plot size by the Paranaiba method
+#'
+#' Estimates the optimal plot size from the raw uniformity-trial grid using the
+#' maximum curvature of the coefficient of variation model (Paranaiba, Ferreira
+#' & Morais, 2009). Unlike [fit_lrp()], [fit_qrp()] and [fit_mcm()], which take
+#' CV values already computed for several plot sizes, this method works directly
+#' on the basic experimental units (BEU) and returns a closed-form estimate:
+#' \deqn{X_o = \frac{10 \sqrt[3]{2 (1 - \rho^2) s^2 m}}{m}, \qquad
+#'       CV_{Xo} = \frac{100 \sqrt{(1 - \rho^2) s^2 / m^2}}{\sqrt{X_o}}}
+#' where \eqn{m} and \eqn{s^2} are the mean and variance of the BEU values and
+#' \eqn{\rho} is the first-order spatial autocorrelation.
+#'
+#' @section Direction of the autocorrelation:
+#' \eqn{\rho} is estimated along a serpentine walk through the grid. The original
+#' method walks in the direction of the rows (\code{rho_direction = "row"},
+#' the default). \code{"col"} walks down the columns and \code{"mean"} averages
+#' both directions; these can give visibly different \eqn{\rho} and so a
+#' different \eqn{X_o}.
+#'
+#' @section Input:
+#' Supply either a matrix (one trial), a list of matrices (several trials), or a
+#' data frame in long format with the value column plus row/column indices, or a
+#' data frame whose \code{n_col} value columns hold the grid (see \code{value},
+#' \code{row_id}, \code{col_id}, \code{trial}).
+#'
+#' @param .data a matrix, a list of matrices, or a data frame.
+#' @param value name of the column holding the BEU measurement (long format).
+#' @param row_id,col_id names of the row and column index columns (long format).
+#' @param trial optional column name identifying the trial.
+#' @param n_row,n_col grid dimensions; required only for a matrix supplied as a
+#'   plain vector, or to check the grid of a long data frame.
+#' @param rho_direction \code{"row"} (default), \code{"col"} or \code{"mean"}.
+#'
+#' @return An object of class \code{"paranaiba_fit"}: a list with \code{summary}
+#'   (one row per trial: mean, variance, CV, rho_row, rho_col, rho, Xo, CVxo,
+#'   valid) and \code{meta}.
+#'
+#' @references
+#' Paranaiba, P. F., Ferreira, D. F. & Morais, A. R. (2009). Tamanho otimo de
+#' parcelas experimentais: proposicao de metodos de estimacao. \emph{Revista
+#' Brasileira de Biometria}, 27(2), 255-268. \cr
+#' Cargnelutti Filho, A. et al. (2014). Tamanho de parcela e numero de
+#' repeticoes em aveia preta. \emph{Ciencia Rural}, 44(10), 1732-1739.
+#'
+#' @seealso [fit_lrp()], [fit_mcm()], [calc_replicates()]
+#' @examples
+#' set.seed(1)
+#' grid <- matrix(rnorm(36, 250, 60), nrow = 6)
+#' calc_paranaiba(grid)
+#' @export
+calc_paranaiba <- function(.data, value = NULL, row_id = NULL, col_id = NULL,
+                           trial = NULL, n_row = NULL, n_col = NULL,
+                           rho_direction = c("row", "col", "mean")) {
+
+  rho_direction <- match.arg(rho_direction)
+
+  ## ---- build a named list of matrices ----
+  mats <- NULL
+
+  if (is.matrix(.data)) {
+    mats <- list(`Trial 1` = .data)
+
+  } else if (is.list(.data) && !is.data.frame(.data)) {
+    if (!all(vapply(.data, is.matrix, logical(1))))
+      stop("When `.data` is a list, every element must be a matrix.",
+           call. = FALSE)
+    nms <- names(.data)
+    if (is.null(nms)) nms <- paste("Trial", seq_along(.data))
+    mats <- stats::setNames(.data, nms)
+
+  } else if (is.data.frame(.data)) {
+    if (is.null(value))
+      stop("For a data frame, give `value` (the measurement column), plus ",
+           "`row_id` and `col_id`.", call. = FALSE)
+    need <- c(value, row_id, col_id, trial)
+    missing_cols <- setdiff(need, names(.data))
+    if (length(missing_cols))
+      stop(sprintf("Column(s) not found in `.data`: %s.\n  Available: %s.",
+                   paste(missing_cols, collapse = ", "),
+                   paste(names(.data), collapse = ", ")), call. = FALSE)
+    if (is.null(row_id) || is.null(col_id))
+      stop("`row_id` and `col_id` are required for a long-format data frame.",
+           call. = FALSE)
+
+    split_by <- if (is.null(trial)) rep("Trial 1", nrow(.data))
+    else as.character(.data[[trial]])
+    groups <- split(.data, split_by)
+
+    mats <- lapply(groups, function(g) {
+      ri <- as.integer(factor(g[[row_id]]))
+      ci <- as.integer(factor(g[[col_id]]))
+      nr <- max(ri); nc <- max(ci)
+      if (nrow(g) != nr * nc)
+        stop(sprintf(paste0("Trial has %d rows but the grid implied by ",
+                            "`row_id`/`col_id` is %d x %d = %d cells."),
+                     nrow(g), nr, nc, nr * nc), call. = FALSE)
+      mm <- matrix(NA_real_, nrow = nr, ncol = nc)
+      mm[cbind(ri, ci)] <- as.numeric(g[[value]])
+      if (anyNA(mm))
+        stop("The grid has missing cells; every row/column combination must ",
+             "be present.", call. = FALSE)
+      mm
+    })
+
+  } else {
+    stop("`.data` must be a matrix, a list of matrices, or a data frame.",
+         call. = FALSE)
+  }
+
+  ## optional dimension check
+  if (!is.null(n_row) || !is.null(n_col)) {
+    for (nm in names(mats)) {
+      d <- dim(mats[[nm]])
+      if ((!is.null(n_row) && d[1] != n_row) ||
+          (!is.null(n_col) && d[2] != n_col))
+        stop(sprintf("Trial '%s' is %d x %d, which does not match n_row/n_col.",
+                     nm, d[1], d[2]), call. = FALSE)
+    }
+  }
+
+  message(sprintf("Paranaiba method on %d trial(s); rho direction = '%s'.",
+                  length(mats), rho_direction))
+
+  summ <- do.call(rbind, Map(function(mm, nm)
+    .paranaiba_one(mm, rho_direction, nm), mats, names(mats)))
+  rownames(summ) <- NULL
+
+  structure(list(summary = summ, matrices = mats,
+                 meta = list(rho_direction = rho_direction,
+                             n_trials = length(mats))),
+            class = "paranaiba_fit")
+}
+
+## Methods --------------------------------------------------------------------
 #' @export
 print.paranaiba_fit <- function(x, ...) {
-  cat("Paranaiba optimal plot size estimate\n")
-  cat("Replications:", nrow(x$data), " | Invalid (zero variance):", sum(!x$data$valid), "\n\n")
-  print(x$data)
+  cat("Paranaiba optimal plot size\n")
+  cat("Trials:", x$meta$n_trials,
+      " | rho direction:", x$meta$rho_direction,
+      " | invalid:", sum(!x$summary$valid), "\n\n")
+  d <- x$summary
+  num <- c("mean", "variance", "CV", "rho_row", "rho_col", "rho", "Xo", "CVxo")
+  d[num] <- lapply(d[num], round, 3)
+  print(d, row.names = FALSE)
+  if (x$meta$n_trials > 1)
+    cat(sprintf("\nMean Xo: %.2f  |  Mean CVxo: %.2f\n",
+                mean(x$summary$Xo, na.rm = TRUE),
+                mean(x$summary$CVxo, na.rm = TRUE)))
   invisible(x)
 }
 
 #' @export
 summary.paranaiba_fit <- function(object, ...) {
-  cat("Optimal plot size across replications:\n")
-  print(summary(object$data$Optimal_size))
+  d <- object$summary[object$summary$valid, ]
+  cat("Optimal plot size (Xo) across trials:\n")
+  print(summary(d$Xo))
+  cat("\nCV at optimal plot size (CVxo):\n")
+  print(summary(d$CVxo))
   invisible(object)
 }
 
+#' Plot Paranaiba estimates by trial
+#'
+#' Shows the optimal plot size per trial, with the mean across trials as a
+#' dashed reference line.
+#'
+#' @param x a \code{"paranaiba_fit"} object.
+#' @param y_var \code{"Xo"} (default) or \code{"CVxo"}.
+#' @param title,xlab,ylab labels; \code{ylab = NULL} is chosen from \code{y_var}.
+#' @param show_mean draw the across-trial mean as a dashed line.
+#' @param fill_colour bar fill colour.
+#' @param base_size,title_size,family,theme theme controls.
+#' @param save,file,format,dpi,width,height,units,compression saving controls.
+#' @param ... ignored.
+#' @return A \code{ggplot} object (invisibly when saved).
 #' @export
-plot.paranaiba_fit <- function(x, ...) {
-  print(x$plot)
-  invisible(x$plot)
+plot.paranaiba_fit <- function(x, y_var = c("Xo", "CVxo"),
+                               title = "Paranaiba method",
+                               xlab = "Trial", ylab = NULL, show_mean = TRUE,
+                               fill_colour = "grey35",
+                               base_size = 13, title_size = NULL,
+                               family = "serif", theme = NULL,
+                               save = FALSE, file = NULL,
+                               format = c("tiff", "png", "jpeg", "pdf", "eps"),
+                               dpi = 300, width = 18, height = 12, units = "cm",
+                               compression = "lzw", ...) {
+  y_var  <- match.arg(y_var)
+  format <- match.arg(format)
+  if (is.null(title_size)) title_size <- base_size
+  if (is.null(ylab))
+    ylab <- if (y_var == "Xo") expression("Optimal plot size (" * m^2 * ")")
+  else "CV at optimal plot size (%)"
+
+  d <- x$summary
+  d$.y <- d[[y_var]]
+
+  g <- ggplot2::ggplot(d, ggplot2::aes(factor(trial), .y)) +
+    ggplot2::geom_col(fill = fill_colour, width = 0.65, na.rm = TRUE)
+
+  if (show_mean && sum(d$valid) > 1)
+    g <- g + ggplot2::geom_hline(yintercept = mean(d$.y, na.rm = TRUE),
+                                 linetype = 2, linewidth = 0.6)
+
+  g <- g +
+    ggplot2::labs(title = title, x = xlab, y = ylab) +
+    ggplot2::scale_y_continuous(expand = ggplot2::expansion(mult = c(0, 0.08))) +
+    (if (is.null(theme))
+      ggplot2::theme_classic(base_size = base_size, base_family = family)
+     else theme) +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(hjust = 0.5, size = title_size),
+      axis.line  = ggplot2::element_line(colour = "black", linewidth = 0.6),
+      axis.ticks = ggplot2::element_line(colour = "black"),
+      axis.text  = ggplot2::element_text(colour = "black")
+    )
+
+  if (save) {
+    .save_lrp(g, file, title, format, dpi, width, height, units, compression)
+    return(invisible(g))
+  }
+  g
 }
