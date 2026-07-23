@@ -1,0 +1,232 @@
+---
+title: "Linear Response Plateau (LRP)"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Linear Response Plateau (LRP)}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 7,
+                      fig.height = 4.5, dpi = 120)
+```
+
+```{r setup}
+library(DimExp)
+```
+
+## Theory
+
+In a uniformity trial, adjacent basic experimental units (BEU) are grouped into
+plots of increasing size `X`, and the coefficient of variation `CV(X)` is
+computed among plots of each size. The CV falls as plots get larger, but the
+gain shrinks: past a certain size, extra area buys almost no precision. The
+Linear Response Plateau model formalizes that as two joined straight lines,
+
+$$
+CV_{(X)} =
+\begin{cases}
+a + bX + \varepsilon, & \text{if } X \le X_o \\
+p + \varepsilon,      & \text{if } X > X_o
+\end{cases}
+$$
+
+The first segment falls with slope $b < 0$; the second is flat at the plateau
+$p$. The join between them is the estimate of interest: $X_o$ is the optimal
+plot size and $p = CV_{Xo}$ is the CV expected at that size. From the model,
+
+$$
+X_o = \frac{p - a}{b}, \qquad CV_{Xo} = a + b X_o
+$$
+
+### How the breakpoint is estimated
+
+Fitting a broken line is awkward for general-purpose nonlinear least squares:
+the model has a kink, so `nls()` depends heavily on the starting values and can
+settle on a local minimum or fail to converge without saying so clearly.
+
+`fit_lrp()` avoids this by **profiling** the breakpoint. It walks a fine grid of
+candidate values for $X_o$; at each candidate the model becomes linear, so the
+coefficients come from ordinary least squares. The candidate with the smallest
+residual sum of squares wins. There are no starting values, no local minima, and
+no convergence failures.
+
+### References
+
+Original method: Paranaíba, P. F., Ferreira, D. F. & Morais, A. R. (2009).
+Tamanho ótimo de parcelas experimentais: proposição de métodos de estimação.
+*Revista Brasileira de Biometria*, 27(2), 255-268.
+
+Validation used here: Cargnelutti Filho, A., Loro, M. V., Ortiz, V. M. &
+Andretta, J. A. (2025). Determinação do tamanho de parcela para avaliar a massa
+de parte aérea de grão-de-bico. *Revista Vivências*, 21(43), 499-513.
+
+## Data
+
+The examples use the chickpea uniformity trials of the validation article: a
+6 × 6 grid of 1 m² BEU per trial, grouped into 15 plot shapes. `X` is the plot
+size in BEU and `CV1`--`CV3` are the CVs of trials 1 to 3.
+
+```{r data}
+X   <- c(1, 2, 2, 3, 3, 4, 6, 6, 6, 6, 9, 12, 12, 18, 18)
+CV1 <- c(30.40, 19.51, 23.72, 12.89, 21.32, 16.69, 6.71, 10.75,
+         17.58, 14.94, 11.93, 3.18, 8.63, 4.25, 11.41)
+CV2 <- c(34.79, 29.44, 26.45, 26.35, 31.74, 25.01, 21.44, 22.86,
+         28.93, 16.17, 27.29, 19.89, 16.85, 26.53, 14.70)
+CV3 <- c(31.12, 20.87, 29.09, 20.02, 28.04, 19.97, 10.74, 19.28,
+         18.18, 26.46, 17.41, 11.51, 17.96, 9.18, 19.17)
+```
+
+Note that `X` repeats: several shapes share the same size (four different
+shapes of 6 BEU, for instance). Supply one CV per shape, never the mean per
+size, or the fit loses the within-size variability it needs.
+
+## Basic use
+
+```{r fit}
+fit <- fit_lrp(x = X, cv = CV1)
+fit
+```
+
+$X_o = 7.44$ m² with $CV_{Xo} = 7.88\%$, reproducing the published values for
+trial 1.
+
+`summary()` splits the model coefficients from the fit statistics:
+
+```{r summary}
+summary(fit)
+```
+
+Everything is also available directly:
+
+```{r access}
+fit$coefficients
+fit$parameters["Breakpoint"]
+round(fit$residuals[1:5], 3)
+```
+
+`predict()` evaluates the fitted model at any plot size, which is handy to check
+the plateau behaviour:
+
+```{r predict}
+predict(fit, newx = c(1, 5, 7.44, 15))
+```
+
+The last two values are identical: past the breakpoint the model is flat.
+
+## Plot
+
+The `plot()` method draws the article-style figure. Title and styling go here,
+not in `fit_lrp()`:
+
+```{r plot}
+plot(fit, title = "Trial 1 (chickpea)")
+```
+
+For Portuguese-language figures, switch the decimal mark and the conditional
+word:
+
+```{r plot-ptbr}
+plot(fit, title = "Ensaio 1", decimal_mark = ",", cond_word = "se")
+```
+
+Other useful arguments: `annotate_model = FALSE` drops the equation block,
+`base_size` / `label_size` / `title_size` scale the text, `theme` accepts any
+ggplot2 theme, and `xlab` / `ylab` relabel the axes.
+
+To export, set `save = TRUE`. TIFF is written with LZW compression; PDF and EPS
+are vector formats, usually the better choice for line art like this.
+
+```{r save, eval = FALSE}
+plot(fit, title = "Trial 1",
+     save = TRUE, file = "trial1.tiff", format = "tiff",
+     dpi = 300, width = 18, height = 12, units = "cm")
+```
+
+## Several trials at once
+
+Pass a data frame plus the column names. One model is fitted per trial:
+
+```{r multi}
+trials <- rbind(
+  data.frame(x = X, cv = CV1, trial = "Trial 1"),
+  data.frame(x = X, cv = CV2, trial = "Trial 2"),
+  data.frame(x = X, cv = CV3, trial = "Trial 3")
+)
+
+res <- fit_lrp(trials, x = "x", cv = "cv", trial = "trial")
+res
+```
+
+The three breakpoints (7.44, 6.56, 7.57) match the published table, and their
+mean, 7.19 m², is the article's overall recommendation.
+
+The individual fits stay accessible, so any single trial can be inspected or
+plotted as usual:
+
+```{r multi-access}
+res$fits[["Trial 2"]]
+```
+
+`plot()` on the multi-trial object arranges the panels in a grid of at most six
+(3 rows × 2 columns), paginating into separate figures beyond that. It needs
+the **patchwork** package.
+
+```{r multi-plot, eval = FALSE}
+plot(res, decimal_mark = ",", cond_word = "se", label_size = 3)
+```
+
+Column names default to `"x"`, `"cv"` and `"trial"`, so `fit_lrp(trials)` alone
+works when the data frame already uses those names. Missing columns produce a
+clear error rather than a cryptic one:
+
+```{r error, error = TRUE}
+fit_lrp(trials, x = "x", cv = "CV", trial = "trial")
+```
+
+## Fine-tuning
+
+**`search_range`** restricts where the breakpoint is searched, which helps when
+an outlier in the transition zone pulls the estimate somewhere implausible.
+It must fall inside the data range, and a warning is issued if the breakpoint
+lands on the edge of the range you gave.
+
+```{r search-range}
+fit_lrp(X, CV1, search_range = c(5, 12))$parameters["Breakpoint"]
+```
+
+**`step`** is the grid resolution, 0.001 by default. Coarser grids are faster
+and slightly less precise:
+
+```{r step}
+fit_lrp(X, CV1, step = 0.01)$parameters["Breakpoint"]
+```
+
+**`method`** chooses how the linear coefficients are estimated at each candidate
+breakpoint. `"segment"` (default) uses only the observations with `x <= X0`,
+reproducing the published procedure. `"ramp"` uses every observation on the
+basis `pmin(x, X0)`, the standard least-squares LRP; the plateau points then
+also inform the descending line, which can shift the optimum.
+
+```{r method}
+fit_lrp(X, CV1, method = "ramp")$parameters["Breakpoint"]
+```
+
+## Warnings worth heeding
+
+Two situations trigger a warning, and both mean the estimate deserves a second
+look rather than direct use:
+
+- **Non-negative slope**: the CV is not decreasing with plot size, so the
+  "descent then plateau" reading does not hold for these data.
+- **Breakpoint at the edge of the search range**: the trial may not span enough
+  plot sizes to bracket the true optimum, so the CV may still be falling at the
+  largest size evaluated.
+
+## Where to go next
+
+`vignette("qrp")` and `vignette("mcm")` cover the other two CV-based methods,
+which take the same inputs and usually give a larger and a smaller optimum
+respectively. `vignette("replicates")` shows how $CV_{Xo}$ feeds into the number
+of replications.

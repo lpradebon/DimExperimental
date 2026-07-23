@@ -1,0 +1,200 @@
+---
+title: "Number of replications"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Number of replications}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 6.8,
+                      fig.height = 4.4, dpi = 120)
+```
+
+```{r setup}
+library(DimExp)
+```
+
+## Theory
+
+Choosing the plot size settles one half of the design; the other half is how
+many times to replicate it. The two are linked: the plot size determines the
+experimental precision, expressed as $CV_{Xo}$, and that precision determines
+how many replications are needed to detect a given difference between treatment
+means.
+
+The starting point is the least significant difference of the Tukey test,
+expressed as a percentage of the experiment mean:
+
+$$
+d = \frac{q_{\alpha(i;\,GLE)} \sqrt{QME / r}}{m} \times 100
+$$
+
+where $q_{\alpha(i;GLE)}$ is the Tukey critical value for $i$ treatments and
+$GLE$ error degrees of freedom, $QME$ is the error mean square, $r$ is the
+number of replications and $m$ the mean. Substituting the experimental
+coefficient of variation, $CV = 100\sqrt{QME}/m$, and solving for $r$:
+
+$$
+r = \left(\frac{q_{\alpha(i;\,GLE)} \cdot CV}{d}\right)^{2}
+$$
+
+with error degrees of freedom
+
+$$
+GLE = i\,(r - 1) \ \text{ for CRD}, \qquad
+GLE = (i - 1)(r - 1) \ \text{ for RCBD}
+$$
+
+Here $CV$ is $CV_{Xo}$: the CV expected once the experiment uses the optimal
+plot size.
+
+### Why this needs iteration
+
+The expression is circular. The critical value $q_\alpha$ depends on the error
+degrees of freedom, which depend on $r$, which is what we are solving for. So
+$r$ is obtained iteratively: guess $r$, compute $GLE$ and $q_\alpha$, get a new
+$r$, repeat until it stops moving.
+
+`calc_replicates()` runs that fixed point and reports **two readings** of the
+result:
+
+- `r_continuous`: the converged value, e.g. 10.46. This is what the published
+  tables print, and what to quote when comparing with an article.
+- `r_optimal`: the practical integer, `ceiling(r_continuous)`, floored at 2.
+  You cannot run 10.46 replications, and no design runs fewer than 2.
+
+Smaller $d$ means finer resolution, and the cost is steep: because $r$ grows
+with the square of $1/d$, halving the difference you want to detect roughly
+quadruples the replications needed.
+
+### References
+
+Method: Cargnelutti Filho, A., Alves, B. M., Toebe, M., Burin, C., Santos,
+G. O., Facco, G., Neu, I. M. M. & Stefanello, R. B. (2014). Tamanho de parcela e
+número de repetições em aveia preta. *Ciência Rural*, 44(10), 1732-1739.
+
+The examples below reproduce Tables 2 (CRD) and 3 (RCBD) of that article, which
+use black oat with $X_o = 4.14$ m² and $CV_{Xo} = 9.25\%$.
+
+## Basic use
+
+```{r basic}
+reps <- calc_replicates(
+  treatments  = c(3, 10, 50),
+  cv_percent  = 9.25,
+  lsd_percent = c(10, 20, 30),
+  design      = "CRD"
+)
+reps
+```
+
+Reading the first row: with 3 treatments and a CV of 9.25%, detecting a
+difference of 10% of the mean needs 10.46 replications in theory, so 11 in
+practice. The published table gives 10.46 for that cell.
+
+```{r summary}
+summary(reps)
+```
+
+The full grid is in `$data`, one row per treatments × LSD combination:
+
+```{r access}
+head(reps$data[, c("Treatments", "LSD_percent", "r_continuous",
+                   "r_optimal", "df_error", "q_tukey")])
+```
+
+## Design, significance level
+
+Randomized complete blocks need slightly more replications than a completely
+randomized design at the same precision, because blocking costs error degrees of
+freedom. The gap narrows as the number of treatments grows:
+
+```{r design}
+rbind(
+  CRD  = calc_replicates(c(3, 50), 9.25, 10, design = "CRD")$data$r_continuous,
+  RCBD = calc_replicates(c(3, 50), 9.25, 10, design = "RCBD")$data$r_continuous
+)
+```
+
+With 3 treatments the difference is 10.46 against 10.95; with 50 it has
+practically vanished. Both match the published tables.
+
+A stricter significance level raises the critical value and therefore the
+replications:
+
+```{r alpha}
+rbind(
+  `alpha = 0.05` = calc_replicates(10, 9.25, 20, alpha = 0.05)$data$r_continuous,
+  `alpha = 0.01` = calc_replicates(10, 9.25, 20, alpha = 0.01)$data$r_continuous
+)
+```
+
+## The full workflow
+
+In practice $CV_{Xo}$ comes from one of the plot-size methods rather than being
+typed in. Fitting the chickpea trial and feeding the result straight through:
+
+```{r workflow}
+X   <- c(1, 2, 2, 3, 3, 4, 6, 6, 6, 6, 9, 12, 12, 18, 18)
+CV1 <- c(30.40, 19.51, 23.72, 12.89, 21.32, 16.69, 6.71, 10.75,
+         17.58, 14.94, 11.93, 3.18, 8.63, 4.25, 11.41)
+
+lrp  <- fit_lrp(X, CV1)
+cvxo <- unname(lrp$parameters["Breakpoint_Response"])
+cvxo
+
+calc_replicates(treatments = c(5, 10, 20), cv_percent = cvxo,
+                lsd_percent = c(10, 20), design = "RCBD")$data[
+                  , c("Treatments", "LSD_percent", "r_continuous", "r_optimal")]
+```
+
+So a trial designed with plots of 7.44 m² would carry an expected CV of 7.88%,
+and detecting differences of 20% of the mean among 10 treatments in blocks would
+need 4 replications.
+
+## Plot
+
+Over a range of treatments the trade-off becomes visual: one line per LSD level,
+showing how the requirement climbs as the number of treatments grows and as the
+target difference tightens.
+
+```{r plot}
+reps <- calc_replicates(treatments = 3:50, cv_percent = 9.25,
+                        lsd_percent = c(10, 20, 30), design = "CRD")
+
+plot(reps, title = "Replications needed (black oat)")
+```
+
+The default plots the integer `r_optimal`, which is why the lines are stepped.
+For the smooth theoretical curve, plot the continuous value:
+
+```{r plot-continuous}
+plot(reps, y_var = "r_continuous", title = "Replications (continuous)")
+```
+
+```{r save, eval = FALSE}
+plot(reps, title = "Replications needed",
+     save = TRUE, file = "replications.tiff", format = "tiff", dpi = 300)
+```
+
+## Reading the results
+
+The article's conclusion illustrates how these numbers are used in practice.
+With a CV of 9.25%, detecting differences of 10% of the mean would need around
+27 replications for 50 treatments, which is not feasible in the field. Turning
+the question around and fixing $r = 4$, a common choice in the literature, the
+detectable difference becomes about 26.7% of the mean. That is the honest
+statement of what the experiment can and cannot resolve.
+
+The function does not pick a precision for you, and it should not: that decision
+depends on how large a difference matters agronomically and how much field area
+is available. What it does is make the trade-off explicit before the experiment
+is installed rather than after.
+
+## Where to go next
+
+`vignette("lrp")`, `vignette("qrp")` and `vignette("mcm")` cover the CV-based
+plot-size methods that supply $CV_{Xo}$; `vignette("paranaiba")` derives it
+directly from the raw trial grid.

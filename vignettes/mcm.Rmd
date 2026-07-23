@@ -1,0 +1,224 @@
+---
+title: "Modified Maximum Curvature (MCM)"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Modified Maximum Curvature (MCM)}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 7,
+                      fig.height = 4.5, dpi = 120)
+```
+
+```{r setup}
+library(DimExp)
+```
+
+## Theory
+
+The two plateau models cut the CV curve into pieces. The Modified Maximum
+Curvature method takes a different route: it fits a single smooth curve and then
+asks where that curve *bends the most*.
+
+The relationship between CV and plot size is described by a power function,
+
+$$
+CV_{(X)} = \frac{a}{X^{b}} + \varepsilon = a X^{-b} + \varepsilon
+$$
+
+with $a > 0$ and $b > 0$, so the CV decreases as plots grow. This curve never
+becomes exactly flat, which is why the method cannot simply read off a plateau.
+Instead it uses the curvature of the line at each point,
+
+$$
+K = \frac{y''}{\left(1 + y'^2\right)^{3/2}}
+$$
+
+and takes the optimal plot size as the point of maximum curvature, the "elbow"
+where the steep initial drop turns into the slow tail. Solving
+$\mathrm{d}K/\mathrm{d}X = 0$ for $y = aX^{-b}$ gives a closed form:
+
+$$
+X_o = \left[\frac{a^{2} b^{2} (2b + 1)}{b + 2}\right]^{\frac{1}{2b + 2}},
+\qquad CV_{Xo} = a X_o^{-b}
+$$
+
+Because it locates an elbow rather than a plateau, the MCM systematically
+returns a **smaller** optimum than the LRP and QRP, and correspondingly a higher
+CV at the optimum. This is expected, not an error.
+
+A note on the word "modified": in the original paper it refers to correcting
+$X_c$ by the cost factors $K_1$ and $K_2$ (labour per plot and per unit area).
+Modern Brazilian plot-size studies drop that cost step, and `fit_mcm()` follows
+them: $X_o$ is returned in the units of `x`.
+
+### Two ways to estimate a and b
+
+This is the one place in the package where the two reference articles genuinely
+disagree, so both are available.
+
+**`method = "loglinear"`** is the classic route. Taking logs linearizes the
+model,
+
+$$
+\log CV_{(X)} = \log a - b \log X + \varepsilon
+$$
+
+so `a` and `b` come from a straight-line regression. Meier & Lessman weight
+that regression by the degrees of freedom of each point, following Federer
+(1955): CVs from large plots are computed from fewer plots and are less
+reliable, so they should count less. Pass `df` to enable that weighting.
+
+**`method = "nls"`** (the default) fits $CV = aX^{-b}$ directly on the original
+scale by nonlinear least squares, seeded from the log-log fit. This is what the
+modern articles do, and it is consistent with `fit_lrp()` and `fit_qrp()`. If
+`nls()` fails to converge, the function falls back to the log-linear estimate
+with a warning rather than erroring out.
+
+The two give visibly different answers, so choose deliberately: match whichever
+article you are comparing against.
+
+### References
+
+Original method: Meier, V. D. & Lessman, K. J. (1971). Estimation of optimum
+field plot shape and size for testing yield in *Crambe abyssinica* Hochst.
+*Crop Science*, 11(5), 648-650. (After Lessman & Atkins, 1963.)
+
+Weighting: Federer, W. T. (1955). *Experimental Design*. Macmillan, New York.
+
+Validation used here: Cargnelutti Filho, A., Loro, M. V., Ortiz, V. M. &
+Andretta, J. A. (2025). Determinação do tamanho de parcela para avaliar a massa
+de parte aérea de grão-de-bico. *Revista Vivências*, 21(43), 499-513.
+
+## Data
+
+The chickpea trials again. `n` is the number of plots of each size
+($n = 36/X$), which supplies the degrees of freedom for the optional weighting.
+
+```{r data}
+X   <- c(1, 2, 2, 3, 3, 4, 6, 6, 6, 6, 9, 12, 12, 18, 18)
+n   <- c(36, 18, 18, 12, 12, 9, 6, 6, 6, 6, 4, 3, 3, 2, 2)
+CV1 <- c(30.40, 19.51, 23.72, 12.89, 21.32, 16.69, 6.71, 10.75,
+         17.58, 14.94, 11.93, 3.18, 8.63, 4.25, 11.41)
+CV2 <- c(34.79, 29.44, 26.45, 26.35, 31.74, 25.01, 21.44, 22.86,
+         28.93, 16.17, 27.29, 19.89, 16.85, 26.53, 14.70)
+CV3 <- c(31.12, 20.87, 29.09, 20.02, 28.04, 19.97, 10.74, 19.28,
+         18.18, 26.46, 17.41, 11.51, 17.96, 9.18, 19.17)
+```
+
+Both `x` and `cv` must be strictly positive: the log-log fit and the starting
+values are undefined otherwise.
+
+## Basic use
+
+```{r fit}
+fit <- fit_mcm(x = X, cv = CV1)
+fit
+```
+
+$X_o = 5.76$ m² with $CV_{Xo} = 12.54\%$, reproducing the published MCM values
+for trial 1 (and, as expected, well below the LRP's 7.44 m²).
+
+```{r summary}
+summary(fit)
+```
+
+The closed form can be verified straight from the coefficients:
+
+```{r check}
+a <- unname(fit$coefficients["a"]); b <- unname(fit$coefficients["b"])
+c(formula  = ((a^2 * b^2 * (2 * b + 1)) / (b + 2))^(1 / (2 * b + 2)),
+  reported = unname(fit$parameters["Breakpoint"]))
+```
+
+```{r predict}
+predict(fit, newx = c(1, 6, 18))
+```
+
+Note there is no AIC or BIC here. The MCM is not nested with the plateau models
+and, under `"loglinear"`, is not even fitted on the same scale, so an
+information criterion would not be comparable. Compare methods on `R2` and
+`RMSE`, both reported on the original scale.
+
+## Choosing the estimator
+
+```{r methods}
+rbind(
+  nls        = fit_mcm(X, CV1, method = "nls")$parameters[c("Breakpoint", "R2")],
+  loglinear  = fit_mcm(X, CV1, method = "loglinear")$parameters[c("Breakpoint", "R2")],
+  loglin_df  = fit_mcm(X, CV1, method = "loglinear",
+                       df = n - 1)$parameters[c("Breakpoint", "R2")]
+)
+```
+
+The differences are modest here but real, and they grow when the CVs of the
+large plots are noisy, which is exactly the case the weighting is meant to
+handle. The `df` weighting only applies with `method = "loglinear"`; `df = NULL`
+(the default) is the unweighted fit.
+
+## Plot
+
+The figure has no flat segment: the power curve keeps descending, and the dotted
+guides mark the maximum-curvature point.
+
+```{r plot}
+plot(fit, title = "Trial 1 (chickpea)")
+```
+
+```{r plot-ptbr}
+plot(fit, title = "Ensaio 1", decimal_mark = ",")
+```
+
+There is no `cond_word` argument, since the annotation has no conditional
+clause: a single power equation and $R^2$, plus $X_o$ and $CV_{Xo}$ by the
+breakpoint.
+
+```{r save, eval = FALSE}
+plot(fit, title = "Trial 1",
+     save = TRUE, file = "trial1_mcm.tiff", format = "tiff", dpi = 300)
+```
+
+## Several trials at once
+
+```{r multi}
+trials <- rbind(
+  data.frame(x = X, cv = CV1, trial = "Trial 1"),
+  data.frame(x = X, cv = CV2, trial = "Trial 2"),
+  data.frame(x = X, cv = CV3, trial = "Trial 3")
+)
+
+res <- fit_mcm(trials, x = "x", cv = "cv", trial = "trial")
+res
+```
+
+The three breakpoints (5.76, 3.99, 4.68) average 4.81 m², the article's MCM
+figure.
+
+The degrees of freedom can be supplied as a column, applied to every trial:
+
+```{r multi-df, eval = FALSE}
+trials$df <- rep(n - 1, 3)
+fit_mcm(trials, x = "x", cv = "cv", df = "df", trial = "trial",
+        method = "loglinear")
+```
+
+```{r multi-plot, eval = FALSE}
+plot(res, label_size = 3)
+```
+
+## Warnings worth heeding
+
+- **`b <= 0`**: the CV is not decreasing with plot size, so a maximum-curvature
+  point is meaningless for these data.
+- **nls fallback**: if the message says the fit fell back to the log-linear
+  estimate, the reported values come from `"loglinear"`, not `"nls"`. The
+  `method` field of the object records what was actually used.
+
+## Where to go next
+
+`vignette("lrp")` and `vignette("qrp")` cover the plateau models, which use the
+same inputs and give larger optima. `vignette("paranaiba")` estimates the plot
+size straight from the raw grid instead of from CV values, and
+`vignette("replicates")` turns $CV_{Xo}$ into a number of replications.

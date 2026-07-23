@@ -1,0 +1,212 @@
+---
+title: "Quadratic Response Plateau (QRP)"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Quadratic Response Plateau (QRP)}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 7,
+                      fig.height = 4.5, dpi = 120)
+```
+
+```{r setup}
+library(DimExp)
+```
+
+## Theory
+
+The Quadratic Response Plateau model answers the same question as the LRP, but
+replaces the straight descent with a curve:
+
+$$
+CV_{(X)} =
+\begin{cases}
+a + bX + cX^2 + \varepsilon, & \text{if } X \le X_o \\
+p + \varepsilon,             & \text{if } X > X_o
+\end{cases}
+$$
+
+The plateau starts where the parabola reaches its vertex, so the two pieces meet
+smoothly (no kink, unlike the LRP). That gives closed forms for both quantities
+of interest:
+
+$$
+X_o = -\frac{b}{2c}, \qquad CV_{Xo} = p = a - \frac{b^2}{4c}
+$$
+
+For the curve to descend and then flatten, $b < 0$ and $c > 0$.
+
+Because the descent is curved rather than straight, the QRP stays above a
+straight line for longer and reaches its plateau later. In practice this means
+**QRP almost always gives a larger optimum than LRP**, which in turn gives a
+larger one than the MCM. That ordering (MCM < LRP < QRP) is reported across many
+crops and is not a defect of any of the methods: they answer the same question
+with different assumptions about the shape of the decay.
+
+### How the breakpoint is estimated
+
+The published implementations fit this model with `nls()` or `nlsLM()` and fixed
+starting values. That is fragile: the starting values are not derived from the
+data, and a failure to converge can pass silently.
+
+`fit_qrp()` uses the same grid-search strategy as `fit_lrp()`. Once $X_o$ is
+fixed, the model can be written as
+
+$$
+CV_{(X)} = A + c\,(X - X_o)^2 \ \text{ for } X \le X_o, \qquad
+CV_{(X)} = A \ \text{ for } X > X_o
+$$
+
+which is **linear** in the plateau level $A$ and the curvature $c$. So each
+candidate breakpoint is fitted by ordinary least squares, and the one with the
+smallest residual sum of squares is returned. The reported `a`, `b`, `c` are
+converted back to the usual parametrization via $a = A + cX_o^2$ and
+$b = -2cX_o$. The result is numerically identical to a converged `nls()` fit,
+without the starting values.
+
+### References
+
+Original method: Peixoto, A. P. B., Faria, G. A. & Morais, A. R. (2011).
+Modelos de regressão com platô na estimativa do tamanho de parcelas em
+experimento de conservação in vitro de maracujazeiro. *Ciência Rural*, 41(11),
+1907-1913.
+
+Validation used here: Cargnelutti Filho, A., Loro, M. V., Ortiz, V. M. &
+Andretta, J. A. (2025). Determinação do tamanho de parcela para avaliar a massa
+de parte aérea de grão-de-bico. *Revista Vivências*, 21(43), 499-513.
+
+## Data
+
+Same chickpea uniformity trials used throughout the package.
+
+```{r data}
+X   <- c(1, 2, 2, 3, 3, 4, 6, 6, 6, 6, 9, 12, 12, 18, 18)
+CV1 <- c(30.40, 19.51, 23.72, 12.89, 21.32, 16.69, 6.71, 10.75,
+         17.58, 14.94, 11.93, 3.18, 8.63, 4.25, 11.41)
+CV2 <- c(34.79, 29.44, 26.45, 26.35, 31.74, 25.01, 21.44, 22.86,
+         28.93, 16.17, 27.29, 19.89, 16.85, 26.53, 14.70)
+CV3 <- c(31.12, 20.87, 29.09, 20.02, 28.04, 19.97, 10.74, 19.28,
+         18.18, 26.46, 17.41, 11.51, 17.96, 9.18, 19.17)
+```
+
+## Basic use
+
+```{r fit}
+fit <- fit_qrp(x = X, cv = CV1)
+fit
+```
+
+$X_o = 10.97$ m², matching the published value for trial 1, and noticeably
+larger than the LRP estimate of 7.44 m² on the same data.
+
+```{r summary}
+summary(fit)
+```
+
+The QRP reports more fit statistics than the LRP: alongside `R2` and `RMSE` it
+returns `R2_adj` (adjusted for the extra parameter), `MAE`, `SSE` and `MSE`.
+
+The closed forms can be checked directly against the coefficients:
+
+```{r check}
+cf <- fit$coefficients
+c(vertex = unname(-cf["b"] / (2 * cf["c"])),
+  reported = unname(fit$parameters["Breakpoint"]))
+```
+
+```{r predict}
+predict(fit, newx = c(1, 5, 11, 15))
+```
+
+## Plot
+
+The figure follows the same layout as the LRP, with the quadratic term in the
+annotated equation:
+
+```{r plot}
+plot(fit, title = "Trial 1 (chickpea)")
+```
+
+```{r plot-ptbr}
+plot(fit, title = "Ensaio 1", decimal_mark = ",", cond_word = "se")
+```
+
+The curvature coefficient `c` is small, so it gets its own decimal control,
+`digits_c` (4 by default), separate from `digits_coef` for `a` and `b`.
+
+```{r save, eval = FALSE}
+plot(fit, title = "Trial 1",
+     save = TRUE, file = "trial1_qrp.pdf", format = "pdf",
+     width = 18, height = 12, units = "cm")
+```
+
+## Several trials at once
+
+The data-frame interface is identical to `fit_lrp()`:
+
+```{r multi}
+trials <- rbind(
+  data.frame(x = X, cv = CV1, trial = "Trial 1"),
+  data.frame(x = X, cv = CV2, trial = "Trial 2"),
+  data.frame(x = X, cv = CV3, trial = "Trial 3")
+)
+
+res <- fit_qrp(trials, x = "x", cv = "cv", trial = "trial")
+res
+```
+
+The summary table carries the extra `c` column, since the QRP has three
+coefficients. The three breakpoints average 10.25 m², the article's QRP figure.
+
+```{r multi-access}
+res$fits[["Trial 3"]]
+```
+
+```{r multi-plot, eval = FALSE}
+plot(res, label_size = 3)
+```
+
+## Fine-tuning
+
+`search_range` and `step` behave exactly as in `fit_lrp()`:
+
+```{r tuning}
+fit_qrp(X, CV1, search_range = c(6, 15))$parameters["Breakpoint"]
+fit_qrp(X, CV1, step = 0.01)$parameters["Breakpoint"]
+```
+
+There is no `method` argument here. The LRP has one because the published
+procedure fits the descending line using only the pre-breakpoint points; the QRP
+has no such variant.
+
+## Warnings worth heeding
+
+- **Non-positive curvature** (`c <= 0`): the parabola opens downward or is flat,
+  so the "descend then plateau" shape does not hold for these data.
+- **Breakpoint at the edge of the search range**: the trial may not span enough
+  plot sizes to bracket the optimum.
+
+## Comparing with the other methods
+
+Fitting all three CV-based methods on the same trial shows the usual ordering:
+
+```{r compare}
+data.frame(
+  method = c("MCM", "LRP", "QRP"),
+  Xo = c(fit_mcm(X, CV1)$parameters["Breakpoint"],
+         fit_lrp(X, CV1)$parameters["Breakpoint"],
+         fit_qrp(X, CV1)$parameters["Breakpoint"]),
+  row.names = NULL
+)
+```
+
+Which one to report is a judgement call. The larger optimum is the conservative
+choice: it buys more precision at the cost of more field area. The validation
+article recommends the LRP value as its overall answer, while noting that LRP
+and QRP delivered statistically indistinguishable precision at the optimum.
+
+See `vignette("lrp")` and `vignette("mcm")` for the other two methods, and
+`vignette("replicates")` for turning $CV_{Xo}$ into a number of replications.
