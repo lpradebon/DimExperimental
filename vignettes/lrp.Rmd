@@ -204,15 +204,21 @@ breakpoint is **not sharply identified**, and different software will
 legitimately report different values.
 
 `fit_lrp()` makes this visible instead of hiding it. Every fit carries
-`$local_minima`, and a warning fires when a competitor fits within
-`local_min_tol` (10% by default) of the optimum:
+`$local_minima`, listing each basin with its SSE and its excess over the
+optimum. Basins fitting within `local_min_tol` (10% by default) are flagged in
+the `competing` column and starred by `print()`. Nothing is signalled by a
+warning: stepped profiles almost always have several minima, so a warning would
+fire on nearly every fit and stop meaning anything.
 
 ```{r competing}
 fit2 <- fit_lrp(X, CV2)
 ```
 
 ```{r competing-table}
-round(fit2$local_minima, 3)
+lm2 <- fit2$local_minima
+lm2[c("breakpoint", "SSE", "SSE_excess")] <-
+  round(lm2[c("breakpoint", "SSE", "SSE_excess")], 3)
+lm2
 ```
 
 Read the `SSE_excess` column as "how much worse than the optimum". Here the
@@ -296,13 +302,17 @@ also inform the descending line, which can shift the optimum.
 fit_lrp(X, CV1, method = "ramp")$parameters["Breakpoint"]
 ```
 
-**`local_min_tol`** sets how close a competitor must fit before the warning
-fires. Lower it to be alerted only about near-ties, raise it to be told about
-any competitor.
+**`local_min_tol`** sets how close a competitor must fit to be flagged as
+competing. It changes labelling only, never the fit: lower it (say `0.02`) to
+mark only near-ties, raise it to mark any competitor.
+
+```{r local-min-tol}
+fit_lrp(X, CV2, local_min_tol = 0.02)$local_minima$competing
+```
 
 ## Warnings worth heeding
 
-Three situations trigger a warning, and all mean the estimate deserves a second
+Two situations trigger a warning, and both mean the estimate deserves a second
 look rather than direct use:
 
 - **Non-negative slope**: the CV is not decreasing with plot size, so the
@@ -310,9 +320,11 @@ look rather than direct use:
 - **Breakpoint at the edge of the search range**: the trial may not span enough
   plot sizes to bracket the true optimum, so the CV may still be falling at the
   largest size evaluated.
-- **Competing local minimum**: another breakpoint fits nearly as well, so the
-  estimate is not sharply identified. Inspect `$local_minima` before reporting a
-  single value.
+
+A third situation is reported without a warning, because it is too common for
+one to be informative: a **competing local minimum**, where another breakpoint
+fits nearly as well and the estimate is not sharply identified. Check the
+`competing` column of `$local_minima` before reporting a single value.
 
 ## Where to go next
 

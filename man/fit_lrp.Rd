@@ -49,16 +49,19 @@ the basin containing \code{start}: the solution a gradient-based fitter
 published results obtained with such implementations, and to see how much
 worse they fit.}
 
-\item{local_min_tol}{relative SSE tolerance (default 0.10) for warning about
-a competing local minimum. A second basin fitting within 10\% of the
-optimum means the breakpoint is not sharply identified.}
+\item{local_min_tol}{relative SSE tolerance (default 0.10) deciding which
+local minima count as competing. A second basin fitting within 10\% of the
+optimum means the breakpoint is not sharply identified. Only labelling is
+affected (the \code{competing} column of \code{$local_minima} and the stars
+in \code{print()}); the fit itself never changes, and no warning is issued.}
 }
 \value{
 For a single series, an object of class \code{"lrp_fit"}: a list with
 \code{coefficients} (a, b); \code{parameters} (Breakpoint, Breakpoint_Response,
 R2, RMSE, AIC, BIC); \code{fitted}; \code{residuals}; \code{data};
-\code{method}; \code{step}; \code{local_minima} (competing basins, with
-their SSE excess over the optimum, or \code{NULL}); \code{sse_profile} (the
+\code{method}; \code{step}; \code{local_min_tol}; \code{local_minima} (the
+competing basins, with their SSE excess over the optimum and a
+\code{competing} flag, or \code{NULL}); \code{sse_profile} (the
 SSE at every candidate breakpoint); and \code{compat} when \code{start} was
 given. \cr
 With \code{trial}, an object of class \code{"lrp_multi"}: a list with
@@ -87,10 +90,14 @@ With few distinct plot sizes the residual sum of squares is a stepped
 function of the breakpoint, and it often has several local minima. The grid
 search always returns the global optimum, but a second basin may fit almost
 as well, in which case the breakpoint is not sharply identified and different
-implementations legitimately disagree. Any competing minima are reported in
-\code{$local_minima}, and a warning is issued when one of them fits within
-\code{local_min_tol} of the optimum. Gradient-based fitters return whichever
-basin their starting value lands in; \code{start} reproduces that.
+implementations legitimately disagree. Every local minimum of the profile is
+reported in \code{$local_minima}; those fitting within \code{local_min_tol}
+of the optimum are flagged in the \code{competing} column and starred by
+\code{print()}. No warning is issued: on stepped profiles competing basins
+are common, so a warning would fire on almost every fit. Inspect
+\code{$local_minima} and \code{$sse_profile} instead, and lower
+\code{local_min_tol} to flag only near-ties. Gradient-based fitters return
+whichever basin their starting value lands in; \code{start} reproduces that.
 }
 
 \section{Two ways to call}{

@@ -34,13 +34,16 @@ containing \code{start}, i.e. what a gradient-based fitter seeded there
 would return. Rarely needed for the QRP, whose SSE profile is usually a
 single smooth basin.}
 
-\item{local_min_tol}{relative SSE tolerance (default 0.10) for warning about
-a competing local minimum.}
+\item{local_min_tol}{relative SSE tolerance (default 0.10) deciding which
+local minima count as competing. Only labelling is affected (the
+\code{competing} column of \code{$local_minima} and the stars in
+\code{print()}); the fit never changes, and no warning is issued.}
 }
 \value{
 A \code{"qrp_fit"} (single series) or \code{"qrp_multi"} (per trial).
   The fit also carries \code{local_minima} (competing basins with their SSE
-  excess over the optimum, or \code{NULL}), \code{sse_profile}, and
+  excess over the optimum and a \code{competing} flag, or \code{NULL}),
+  \code{local_min_tol}, \code{sse_profile}, and
   \code{compat} when \code{start} was given. Because the quadratic-plateau
   joins smoothly, this profile is typically a single basin, unlike the
   stepped profile of [fit_lrp()].

@@ -58,9 +58,6 @@ plot_size <- c(1, 2, 4, 6, 8, 10, 15, 20, 25, 30)
 cv        <- c(22.1, 18.4, 14.2, 11.8, 10.1, 9.3, 8.1, 7.6, 7.4, 7.3)
 
 fit <- fit_lrp(x = plot_size, cv = cv)
-#> Warning: Competing local minimum at breakpoint 7.395 (SSE 7.1% above the
-#> optimum at 8.648). The breakpoint is not sharply identified; see $local_minima
-#> and consider `search_range`.
 fit
 #> Linear Response Plateau (LRP) fit
 #> Method:                  segment 
@@ -68,11 +65,12 @@ fit
 #> CV at breakpoint:        7.940 
 #> R2: 0.963  RMSE: 0.935  AIC: 35.0  BIC: 36.3 
 #> 
-#> Competing local minima (7):
-#>   Xo =   7.395   SSE   +7.1% vs optimum
+#> Local minima of the SSE profile (7):
+#>   Xo =   7.395   SSE   +7.1% vs optimum  *
 #>   Xo =  10.059   SSE  +40.2% vs optimum
 #>   Xo =   5.999   SSE +103.9% vs optimum
 #>   ... see $local_minima for all
+#>   * fits within 10% of the optimum (local_min_tol); breakpoint not sharply identified
 ```
 
 The plot title (and other options) go on the `plot()` method, which
@@ -101,9 +99,6 @@ MCM \< LRP \< QRP:
 
 ``` r
 lrp <- fit_lrp(plot_size, cv)
-#> Warning: Competing local minimum at breakpoint 7.395 (SSE 7.1% above the
-#> optimum at 8.648). The breakpoint is not sharply identified; see $local_minima
-#> and consider `search_range`.
 qrp <- fit_qrp(plot_size, cv)
 mcm <- fit_mcm(plot_size, cv)
 
@@ -150,12 +145,6 @@ trials <- rbind(
 
 res <- fit_lrp(trials, x = "plot_size", cv = "cv", trial = "trial")
 #> Using x = 'plot_size', cv = 'cv', trial = 'trial' -> 2 trials.
-#> Warning: Competing local minimum at breakpoint 7.395 (SSE 7.1% above the
-#> optimum at 8.648). The breakpoint is not sharply identified; see $local_minima
-#> and consider `search_range`.
-#> Warning: Competing local minimum at breakpoint 7.395 (SSE 7.1% above the
-#> optimum at 8.648). The breakpoint is not sharply identified; see $local_minima
-#> and consider `search_range`.
 res$summary
 #>     trial       a       b breakpoint plateau     R2   RMSE    AIC    BIC
 #> 1 Trial A 22.2884 -1.6591      8.648  7.9401 0.9628 0.9354 35.043 36.253

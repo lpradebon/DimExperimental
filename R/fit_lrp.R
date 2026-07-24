@@ -31,6 +31,9 @@
   if (length(unique(x)) < 3)
     stop("At least 3 distinct `x` values are required for the breakpoint grid.",
          call. = FALSE)
+  if (!is.numeric(local_min_tol) || length(local_min_tol) != 1 ||
+      is.na(local_min_tol) || local_min_tol < 0)
+    stop("`local_min_tol` must be a single non-negative number.", call. = FALSE)
 
   x_unique <- sort(unique(x))
   feas_lo  <- x_unique[2]
@@ -101,10 +104,12 @@
       lm_x0 <- lm_x0[keep]; lm_ss <- lm_ss[keep]
       if (length(lm_x0)) {
         ord <- order(lm_ss)
+        excess <- lm_ss[ord] / ss_best - 1
         local_minima <- data.frame(
           breakpoint = lm_x0[ord],
           SSE        = lm_ss[ord],
-          SSE_excess = lm_ss[ord] / ss_best - 1,
+          SSE_excess = excess,
+          competing  = excess <= local_min_tol,
           row.names  = NULL)
       }
     }
@@ -163,17 +168,10 @@
             "supplied `search_range`) may not bracket the true breakpoint.",
             call. = FALSE)
 
-  ## competing local minimum close in fit: the breakpoint is not well identified
-  if (!is.null(local_minima) &&
-      any(local_minima$SSE_excess <= local_min_tol)) {
-    j <- which(local_minima$SSE_excess <= local_min_tol)[1]
-    warning(sprintf(paste0("Competing local minimum at breakpoint %.3f ",
-                           "(SSE %.1f%% above the optimum at %.3f). The ",
-                           "breakpoint is not sharply identified; see ",
-                           "$local_minima and consider `search_range`."),
-                    local_minima$breakpoint[j],
-                    100 * local_minima$SSE_excess[j], x0), call. = FALSE)
-  }
+  ## Competing local minima are reported, never warned about: on stepped SSE
+  ## profiles they are the rule rather than the exception, so a warning fires on
+  ## nearly every fit and stops carrying information. `local_min_tol` flags them
+  ## in $local_minima and in print() instead; the user sets the threshold.
 
   structure(
     list(
@@ -182,7 +180,7 @@
                        R2 = r_squared, RMSE = rmse, AIC = aic, BIC = bic),
       fitted = fitted, residuals = residuals,
       data = data.frame(x = x, cv = cv), method = method, step = step,
-      search_range = search_range,
+      search_range = search_range, local_min_tol = local_min_tol,
       local_minima = local_minima, compat = compat,
       sse_profile = data.frame(breakpoint = grid, SSE = ss_profile)
     ),
@@ -214,10 +212,14 @@
 #' function of the breakpoint, and it often has several local minima. The grid
 #' search always returns the global optimum, but a second basin may fit almost
 #' as well, in which case the breakpoint is not sharply identified and different
-#' implementations legitimately disagree. Any competing minima are reported in
-#' \code{$local_minima}, and a warning is issued when one of them fits within
-#' \code{local_min_tol} of the optimum. Gradient-based fitters return whichever
-#' basin their starting value lands in; \code{start} reproduces that.
+#' implementations legitimately disagree. Every local minimum of the profile is
+#' reported in \code{$local_minima}; those fitting within \code{local_min_tol}
+#' of the optimum are flagged in the \code{competing} column and starred by
+#' \code{print()}. No warning is issued: on stepped profiles competing basins
+#' are common, so a warning would fire on almost every fit. Inspect
+#' \code{$local_minima} and \code{$sse_profile} instead, and lower
+#' \code{local_min_tol} to flag only near-ties. Gradient-based fitters return
+#' whichever basin their starting value lands in; \code{start} reproduces that.
 #'
 #' @section Two ways to call:
 #' \describe{
@@ -255,16 +257,19 @@
 #'   (\code{nls}, \code{nlsLM}) seeded there would return. Use it to reproduce
 #'   published results obtained with such implementations, and to see how much
 #'   worse they fit.
-#' @param local_min_tol relative SSE tolerance (default 0.10) for warning about
-#'   a competing local minimum. A second basin fitting within 10\% of the
-#'   optimum means the breakpoint is not sharply identified.
+#' @param local_min_tol relative SSE tolerance (default 0.10) deciding which
+#'   local minima count as competing. A second basin fitting within 10\% of the
+#'   optimum means the breakpoint is not sharply identified. Only labelling is
+#'   affected (the \code{competing} column of \code{$local_minima} and the stars
+#'   in \code{print()}); the fit itself never changes, and no warning is issued.
 #'
 #' @return
 #' For a single series, an object of class \code{"lrp_fit"}: a list with
 #' \code{coefficients} (a, b); \code{parameters} (Breakpoint, Breakpoint_Response,
 #' R2, RMSE, AIC, BIC); \code{fitted}; \code{residuals}; \code{data};
-#' \code{method}; \code{step}; \code{local_minima} (competing basins, with
-#' their SSE excess over the optimum, or \code{NULL}); \code{sse_profile} (the
+#' \code{method}; \code{step}; \code{local_min_tol}; \code{local_minima} (the
+#' competing basins, with their SSE excess over the optimum and a
+#' \code{competing} flag, or \code{NULL}); \code{sse_profile} (the
 #' SSE at every candidate breakpoint); and \code{compat} when \code{start} was
 #' given. \cr
 #' With \code{trial}, an object of class \code{"lrp_multi"}: a list with
@@ -396,12 +401,18 @@ print.lrp_fit <- function(x, ...) {
 
   if (!is.null(x$local_minima)) {
     lmin <- x$local_minima
-    cat("\nCompeting local minima (", nrow(lmin), "):\n", sep = "")
+    tol  <- if (is.null(x$local_min_tol)) 0.10 else x$local_min_tol
+    close <- sum(lmin$competing)
+    cat("\nLocal minima of the SSE profile (", nrow(lmin), "):\n", sep = "")
     show <- utils::head(lmin, 3)
     for (i in seq_len(nrow(show)))
-      cat(sprintf("  Xo = %7.3f   SSE %+6.1f%% vs optimum\n",
-                  show$breakpoint[i], 100 * show$SSE_excess[i]))
+      cat(sprintf("  Xo = %7.3f   SSE %+6.1f%% vs optimum%s\n",
+                  show$breakpoint[i], 100 * show$SSE_excess[i],
+                  if (isTRUE(show$competing[i])) "  *" else ""))
     if (nrow(lmin) > 3) cat("  ... see $local_minima for all\n")
+    if (close)
+      cat(sprintf(paste0("  * fits within %.0f%% of the optimum (local_min_tol);",
+                         " breakpoint not sharply identified\n"), 100 * tol))
   }
 
   if (!is.null(x$compat))
