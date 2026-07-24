@@ -63,9 +63,47 @@ data frame whose \code{n_col} value columns hold the grid (see \code{value},
 }
 
 \examples{
-set.seed(1)
-grid <- matrix(rnorm(36, 250, 60), nrow = 6)
-calc_paranaiba(grid)
+## The packaged uniformity trial holds three replications, each a 6 x 8 grid
+## of basic experimental units (columns C1-C8).
+rep1 <- as.matrix(dados_ensaio_C1[dados_ensaio_C1$Rep == 1, paste0("C", 1:8)])
+dim(rep1)
+
+## One trial, from a matrix
+calc_paranaiba(rep1)
+
+## Several trials, from a named list of matrices
+grids <- lapply(split(dados_ensaio_C1, dados_ensaio_C1$Rep),
+                function(d) as.matrix(d[, paste0("C", 1:8)]))
+names(grids) <- paste("Rep", names(grids))
+par_fit <- calc_paranaiba(grids)
+par_fit$summary
+
+## rho is estimated along a serpentine walk. The original method walks the
+## rows; walking the columns instead can give a visibly different Xo.
+cbind(
+  row  = calc_paranaiba(grids)$summary$Xo,
+  col  = calc_paranaiba(grids, rho_direction = "col")$summary$Xo,
+  mean = calc_paranaiba(grids, rho_direction = "mean")$summary$Xo
+)
+
+## Long format: one row per basic unit, with row and column indices
+long <- data.frame(
+  rep   = rep(dados_ensaio_C1$Rep, times = 8),
+  linha = rep(dados_ensaio_C1$Linha, times = 8),
+  coluna = rep(paste0("C", 1:8), each = nrow(dados_ensaio_C1)),
+  valor = unlist(dados_ensaio_C1[, paste0("C", 1:8)], use.names = FALSE)
+)
+calc_paranaiba(long, value = "valor", row_id = "linha", col_id = "coluna",
+               trial = "rep")$summary
+
+\donttest{
+plot(par_fit)
+
+## CVxo of each trial feeds the number of replications
+calc_replicates(treatments = c(5, 10, 20),
+                cv_percent = mean(par_fit$summary$CVxo),
+                lsd_percent = c(10, 20))
+}
 }
 \references{
 Paranaiba, P. F., Ferreira, D. F. & Morais, A. R. (2009). Tamanho otimo de

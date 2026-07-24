@@ -3,6 +3,184 @@
 ## ============================================================================
 
 ## ----------------------------------------------------------------------------
+## Weights (internal, shared with fit_qrp)
+## ----------------------------------------------------------------------------
+## Resolves the `weights` argument to a numeric vector or NULL. The CV of a
+## large plot size rests on few plots, so weighting by the number of plots is
+## the natural correction; `weights = TRUE` reaches for the `n` column that
+## calc_cv_shapes() produces, which is where that count lives.
+.resolve_weights <- function(weights, .data = NULL, n_obs = NULL) {
+  if (is.null(weights) || identical(weights, FALSE)) return(NULL)
+
+  if (isTRUE(weights)) {
+    if (is.null(.data))
+      stop("`weights = TRUE` takes the `n` column of the data frame. With the ",
+           "vector interface, pass the weights themselves, for example ",
+           "`weights = tab$n`.", call. = FALSE)
+    if (!"n" %in% names(.data))
+      stop("`weights = TRUE` needs a column named `n` (the number of plots per ",
+           "shape, as returned by calc_cv_shapes()).\n  Available columns: ",
+           paste(names(.data), collapse = ", "), ".", call. = FALSE)
+    w <- .data[["n"]]
+
+  } else if (is.character(weights)) {
+    if (length(weights) != 1)
+      stop("`weights` must be a single column name.", call. = FALSE)
+    if (is.null(.data) || !weights %in% names(.data))
+      stop(sprintf("Weight column '%s' not found in `.data`.", weights),
+           call. = FALSE)
+    w <- .data[[weights]]
+
+  } else if (is.numeric(weights)) {
+    w <- weights
+
+  } else {
+    stop("`weights` must be TRUE/FALSE, a column name, or a numeric vector.",
+         call. = FALSE)
+  }
+
+  if (!is.numeric(w) || anyNA(w) || any(w <= 0))
+    stop("Weights must be numeric, complete and strictly positive.",
+         call. = FALSE)
+  if (!is.null(n_obs) && length(w) != n_obs)
+    stop(sprintf("`weights` has length %d but there are %d observations.",
+                 length(w), n_obs), call. = FALSE)
+  as.numeric(w)
+}
+
+## ----------------------------------------------------------------------------
+## Fast SSE profile (internal)
+## ----------------------------------------------------------------------------
+## Same quantity the grid search needs -- the residual sum of squares at every
+## candidate breakpoint -- but computed from cumulative cross-products instead
+## of one lm() call per candidate. Both methods are ordinary least squares on a
+## basis that changes only through "which points lie below x0", so the sums can
+## be accumulated once and reused. This is what makes the bootstrap affordable:
+## a replicate costs about a millisecond instead of a second.
+##
+## Returns a numeric vector aligned with `grid`, with Inf where the candidate
+## is infeasible (fewer than two points below it, or no spread in x).
+## `w = NULL` is the unweighted fit; otherwise every sum below is a weighted
+## sum, which is exactly what weighted least squares needs, and the counts of
+## points become sums of weights.
+.lrp_ss_profile <- function(x, cv, grid, method = "segment", w = NULL) {
+  o  <- order(x)
+  xs <- x[o]; ys <- cv[o]
+  n  <- length(xs)
+  ws <- if (is.null(w)) rep(1, n) else w[o]
+
+  ## cumulative (weighted) sums over the points with x <= x0, indexed 0..n
+  z0   <- 0
+  cSw  <- c(z0, cumsum(ws))
+  cSx  <- c(z0, cumsum(ws * xs));      cSy  <- c(z0, cumsum(ws * ys))
+  cSxx <- c(z0, cumsum(ws * xs * xs)); cSxy <- c(z0, cumsum(ws * xs * ys))
+  cSyy <- c(z0, cumsum(ws * ys * ys))
+  Tw <- cSw[n + 1]; Ty <- cSy[n + 1]; Tyy <- cSyy[n + 1]
+
+  k  <- findInterval(grid, xs)   # number of observations with x <= x0
+  ki <- k + 1L                   # index into the padded cumulative sums
+
+  Sw <- cSw[ki]; Sx <- cSx[ki]; Sy <- cSy[ki]
+  Sxx <- cSxx[ki]; Sxy <- cSxy[ki]; Syy <- cSyy[ki]
+  Sw_r <- Tw - Sw                 # weight above the breakpoint
+  Sy_r <- Ty - Sy; Syy_r <- Tyy - Syy
+
+  if (method == "segment") {
+    ## line fitted on the points below the breakpoint only
+    den <- Sxx - Sx^2 / Sw
+    b   <- (Sxy - Sx * Sy / Sw) / den
+    a   <- Sy / Sw - b * Sx / Sw
+    ss_below <- Syy - a * Sy - b * Sxy
+    p  <- a + b * grid
+    ss <- ss_below + (Syy_r - 2 * p * Sy_r + Sw_r * p^2)
+    ss[k < 2 | !is.finite(den) | den <= 0] <- Inf
+  } else {
+    ## line fitted on every point, on the basis z = pmin(x, x0)
+    Sz  <- Sx + Sw_r * grid
+    Szz <- Sxx + Sw_r * grid^2
+    Szy <- Sxy + grid * Sy_r
+    den <- Szz - Sz^2 / Tw
+    b   <- (Szy - Sz * Ty / Tw) / den
+    a   <- Ty / Tw - b * Sz / Tw
+    ss  <- Tyy - a * Ty - b * Szy
+    ss[!is.finite(den) | den <= 0] <- Inf
+  }
+
+  ss[!is.finite(ss)] <- Inf
+  ## floating-point cancellation can push a zero-residual fit slightly negative
+  pmax(ss, 0)
+}
+
+## ----------------------------------------------------------------------------
+## Bootstrap of the breakpoint (internal)
+## ----------------------------------------------------------------------------
+## Two questions, one machinery:
+##   * how precise is Xo -- resample the shapes (the rows of the CV table) with
+##     replacement and refit, giving a percentile interval;
+##   * is there a breakpoint at all -- the null "CV falls linearly and never
+##     plateaus" leaves the breakpoint unidentified, so the usual likelihood
+##     ratio has no chi-square distribution (Davies' problem). Simulate the
+##     null instead: resample the residuals of the straight line, refit the
+##     plateau model, and see how often the SSE drop matches the observed one.
+.lrp_bootstrap <- function(x, cv, grid, method, ss_best, n_boot, conf_level,
+                           w = NULL) {
+  n <- length(x)
+
+  ## ---- percentile interval for Xo ----
+  reps <- rep(NA_real_, n_boot)
+  for (i in seq_len(n_boot)) {
+    idx <- sample.int(n, n, replace = TRUE)
+    xb  <- x[idx]
+    ## a resample needs enough distinct plot sizes to place a breakpoint
+    if (length(unique(xb)) < 3) next
+    ssb <- .lrp_ss_profile(xb, cv[idx], grid, method, w[idx])
+    if (!any(is.finite(ssb))) next
+    reps[i] <- grid[which.min(ssb)]
+  }
+  ok <- !is.na(reps)
+
+  ## ---- bootstrap test for the existence of the breakpoint ----
+  w0       <- if (is.null(w)) rep(1, n) else w
+  lin      <- if (is.null(w)) stats::lm(cv ~ x) else stats::lm(cv ~ x, weights = w)
+  ss_lin   <- sum(w0 * stats::residuals(lin)^2)
+  ## relative SSE drop of the plateau model over the straight line
+  stat_obs <- (ss_lin - ss_best) / ss_best
+  fit_lin  <- stats::fitted(lin)
+  ## weights say the residuals have unequal variance, so resample them on the
+  ## common scale and put each back on its own; with no weights this is the
+  ## plain residual bootstrap
+  res_std  <- stats::residuals(lin) * sqrt(w0)
+
+  stat_null <- rep(NA_real_, n_boot)
+  for (i in seq_len(n_boot)) {
+    y0  <- fit_lin + sample(res_std, n, replace = TRUE) / sqrt(w0)
+    ss0 <- .lrp_ss_profile(x, y0, grid, method, w)
+    if (!any(is.finite(ss0))) next
+    ss0_best <- min(ss0)
+    l0 <- if (is.null(w)) stats::lm(y0 ~ x) else stats::lm(y0 ~ x, weights = w)
+    ss0_lin <- sum(w0 * stats::residuals(l0)^2)
+    stat_null[i] <- (ss0_lin - ss0_best) / ss0_best
+  }
+  ok_null <- !is.na(stat_null)
+
+  alpha <- (1 - conf_level) / 2
+  list(
+    ci         = if (sum(ok) >= 2)
+      unname(stats::quantile(reps[ok], c(alpha, 1 - alpha))) else c(NA, NA),
+    se         = if (sum(ok) >= 2) stats::sd(reps[ok]) else NA_real_,
+    replicates = reps[ok],
+    n_valid    = sum(ok),
+    n_boot     = n_boot,
+    conf_level = conf_level,
+    ## +1 in numerator and denominator: a p-value of exactly zero is not
+    ## attainable with a finite number of replicates
+    p_value    = if (any(ok_null))
+      (1 + sum(stat_null[ok_null] >= stat_obs)) / (1 + sum(ok_null)) else NA_real_,
+    statistic  = stat_obs
+  )
+}
+
+## ----------------------------------------------------------------------------
 ## Internal single-series engine (not exported)
 ## ----------------------------------------------------------------------------
 #' Fit one LRP series (internal)
@@ -18,7 +196,8 @@
 #' @noRd
 .lrp_fit_one <- function(x, cv, step = 0.001, method = "segment",
                          search_range = NULL, start = NULL,
-                         local_min_tol = 0.10) {
+                         local_min_tol = 0.10, bootstrap = FALSE,
+                         n_boot = 1000, conf_level = 0.95, w = NULL) {
 
   if (!is.numeric(x) || !is.numeric(cv))
     stop("`x` and `cv` must be numeric.", call. = FALSE)
@@ -34,6 +213,24 @@
   if (!is.numeric(local_min_tol) || length(local_min_tol) != 1 ||
       is.na(local_min_tol) || local_min_tol < 0)
     stop("`local_min_tol` must be a single non-negative number.", call. = FALSE)
+  if (!is.logical(bootstrap) || length(bootstrap) != 1 || is.na(bootstrap))
+    stop("`bootstrap` must be TRUE or FALSE.", call. = FALSE)
+  if (isTRUE(bootstrap)) {
+    if (!is.numeric(n_boot) || length(n_boot) != 1 || is.na(n_boot) ||
+        n_boot < 2)
+      stop("`n_boot` must be a single number of at least 2.", call. = FALSE)
+    if (!is.numeric(conf_level) || length(conf_level) != 1 ||
+        is.na(conf_level) || conf_level <= 0 || conf_level >= 1)
+      stop("`conf_level` must be a single number strictly between 0 and 1.",
+           call. = FALSE)
+  }
+
+  if (!is.null(w)) {
+    if (!is.numeric(w) || length(w) != length(x) || anyNA(w) || any(w <= 0))
+      stop("Weights must be numeric, complete, strictly positive and as long ",
+           "as `x`.", call. = FALSE)
+  }
+  wv <- if (is.null(w)) rep(1, length(x)) else w
 
   x_unique <- sort(unique(x))
   feas_lo  <- x_unique[2]
@@ -63,14 +260,16 @@
     if (method == "segment") {
       m <- x <= x0
       if (sum(m) < 2) return(list(ss = Inf))
-      cf <- stats::coef(stats::lm(cv[m] ~ x[m]))
+      cf <- stats::coef(if (is.null(w)) stats::lm(cv[m] ~ x[m])
+                        else stats::lm(cv[m] ~ x[m], weights = w[m]))
     } else {
       z  <- pmin(x, x0)
-      cf <- stats::coef(stats::lm(cv ~ z))
+      cf <- stats::coef(if (is.null(w)) stats::lm(cv ~ z)
+                        else stats::lm(cv ~ z, weights = w))
     }
     a <- unname(cf[1]); b <- unname(cf[2]); p <- a + b * x0
     fit <- ifelse(x <= x0, a + b * x, p)
-    list(ss = sum((cv - fit)^2), a = a, b = b, p = p)
+    list(ss = sum(wv * (cv - fit)^2), a = a, b = b, p = p)
   }
 
   ## grid search over the breakpoint
@@ -144,18 +343,22 @@
                    SSE_excess = cs$ss / ss_best - 1)
   }
 
-  ## fitted values and fit statistics
+  ## Fitted values and fit statistics. With weights these follow the lm()
+  ## convention: residual sums are weighted and the log-likelihood carries the
+  ## 0.5 sum(log w) term. A weighted fit's R2, RMSE, AIC and BIC are therefore
+  ## NOT comparable with the unweighted fit of the same data.
   fitted    <- ifelse(x <= x0, a + b * x, p)
   residuals <- cv - fitted
   n   <- length(cv)
-  rss <- sum(residuals^2)
-  r_squared <- 1 - rss / sum((cv - mean(cv))^2)
-  rmse      <- sqrt(mean(residuals^2))
+  rss <- sum(wv * residuals^2)
+  cv_bar    <- sum(wv * cv) / sum(wv)
+  r_squared <- 1 - rss / sum(wv * (cv - cv_bar)^2)
+  rmse      <- sqrt(rss / sum(wv))
 
   ## AIC / BIC via the Gaussian log-likelihood (MLE variance = rss / n).
   ## Parameter count k = a, b, Xo, sigma = 4, matching the nls / AIC.default
   ## convention. Only comparable with a QRP fit that uses the same count.
-  loglik <- -0.5 * n * (log(2 * pi) + log(rss / n) + 1)
+  loglik <- -0.5 * n * (log(2 * pi) + log(rss / n) + 1) + 0.5 * sum(log(wv))
   k <- 4L
   aic <- -2 * loglik + 2 * k
   bic <- -2 * loglik + log(n) * k
@@ -173,6 +376,11 @@
   ## nearly every fit and stops carrying information. `local_min_tol` flags them
   ## in $local_minima and in print() instead; the user sets the threshold.
 
+  ## optional uncertainty of the breakpoint
+  boot <- NULL
+  if (isTRUE(bootstrap))
+    boot <- .lrp_bootstrap(x, cv, grid, method, ss_best, n_boot, conf_level, w)
+
   structure(
     list(
       coefficients = c(a = a, b = b),
@@ -180,8 +388,8 @@
                        R2 = r_squared, RMSE = rmse, AIC = aic, BIC = bic),
       fitted = fitted, residuals = residuals,
       data = data.frame(x = x, cv = cv), method = method, step = step,
-      search_range = search_range, local_min_tol = local_min_tol,
-      local_minima = local_minima, compat = compat,
+      weights = w, search_range = search_range, local_min_tol = local_min_tol,
+      local_minima = local_minima, compat = compat, bootstrap = boot,
       sse_profile = data.frame(breakpoint = grid, SSE = ss_profile)
     ),
     class = "lrp_fit"
@@ -220,6 +428,50 @@
 #' \code{$local_minima} and \code{$sse_profile} instead, and lower
 #' \code{local_min_tol} to flag only near-ties. Gradient-based fitters return
 #' whichever basin their starting value lands in; \code{start} reproduces that.
+#'
+#' @section Weighting by the number of plots:
+#' The CV values are not equally reliable. A shape of area \eqn{X} leaves
+#' \eqn{n = LC/X} plots in the grid, so the CV of the largest plot size may rest
+#' on two plots while the smallest rests on dozens. \code{weights = TRUE} fits
+#' by weighted least squares with \eqn{n} as the weight, which is the natural
+#' measure of how much information stands behind each point.
+#'
+#' This is off by default because it is not what the published procedure does,
+#' and it moves the answer: the small plot sizes, where the CV is highest, gain
+#' most of the weight, so the fitted line is pulled towards them and the
+#' breakpoint typically falls. Report both if you use it.
+#'
+#' Two cautions. Weighting corrects for unequal information, not for
+#' dependence: every CV in the table comes from the same grid of basic units,
+#' so the points are not independent with or without weights. And a weighted
+#' fit's \eqn{R^2}, RMSE, AIC and BIC follow the \code{\link[stats]{lm}}
+#' convention of being computed on weighted residuals, so they cannot be
+#' compared with those of the unweighted fit.
+#'
+#' @section Uncertainty of the breakpoint:
+#' \code{bootstrap = TRUE} adds two things the point estimate cannot give.
+#'
+#' The first is a percentile confidence interval: the shapes (the rows of the
+#' CV table) are resampled with replacement, the model is refit on each
+#' resample, and the empirical quantiles of the resulting breakpoints form the
+#' interval. Resamples with fewer than three distinct plot sizes cannot place a
+#' breakpoint and are discarded; \code{$bootstrap$n_valid} reports how many were
+#' kept. The interval is usually wide, which is the honest reading of a
+#' breakpoint estimated from a handful of plot sizes.
+#'
+#' The second is a test of whether the breakpoint exists at all. Under the null
+#' hypothesis that the CV falls linearly and never plateaus, the breakpoint is
+#' not identified, so the usual likelihood-ratio statistic does not have a
+#' chi-square distribution (Davies, 1987). The null distribution is simulated
+#' instead: residuals of the straight-line fit are resampled, the plateau model
+#' is refit to each simulated series, and the p-value is the proportion of
+#' simulated SSE reductions that match or exceed the observed one. A large
+#' p-value means a straight line explains the data as well as the plateau, and
+#' the optimal plot size should not be read off this fit.
+#'
+#' Both are computed on the same breakpoint grid as the main fit, so
+#' \code{step} controls their resolution too. Set the random seed before
+#' calling to make the result reproducible.
 #'
 #' @section Two ways to call:
 #' \describe{
@@ -262,6 +514,20 @@
 #'   optimum means the breakpoint is not sharply identified. Only labelling is
 #'   affected (the \code{competing} column of \code{$local_minima} and the stars
 #'   in \code{print()}); the fit itself never changes, and no warning is issued.
+#' @param bootstrap logical; if \code{TRUE}, also estimate the uncertainty of
+#'   the breakpoint by resampling (default \code{FALSE}). Off by default because
+#'   the published procedure reports the point estimate alone. See the section
+#'   "Uncertainty of the breakpoint".
+#' @param n_boot number of bootstrap resamples (default 1000). Used only when
+#'   \code{bootstrap = TRUE}.
+#' @param conf_level confidence level of the percentile interval (default 0.95).
+#'   Used only when \code{bootstrap = TRUE}.
+#' @param weights weights for a weighted least-squares fit. \code{FALSE}
+#'   (default) fits unweighted, as the published procedure does. \code{TRUE}
+#'   uses the \code{n} column of \code{.data}, the number of plots behind each
+#'   CV, as returned by [calc_cv_shapes()]. A single column name or a numeric
+#'   vector are also accepted. See the section "Weighting by the number of
+#'   plots".
 #'
 #' @return
 #' For a single series, an object of class \code{"lrp_fit"}: a list with
@@ -270,8 +536,11 @@
 #' \code{method}; \code{step}; \code{local_min_tol}; \code{local_minima} (the
 #' competing basins, with their SSE excess over the optimum and a
 #' \code{competing} flag, or \code{NULL}); \code{sse_profile} (the
-#' SSE at every candidate breakpoint); and \code{compat} when \code{start} was
-#' given. \cr
+#' SSE at every candidate breakpoint); \code{compat} when \code{start} was
+#' given; and \code{bootstrap} when \code{bootstrap = TRUE}, a list with
+#' \code{ci}, \code{se}, \code{p_value} (existence of the breakpoint),
+#' \code{statistic}, \code{replicates}, \code{n_valid} and \code{conf_level}.
+#' \cr
 #' With \code{trial}, an object of class \code{"lrp_multi"}: a list with
 #' \code{summary} (one row per trial), \code{fits} (the individual
 #' \code{"lrp_fit"} objects) and \code{method}.
@@ -280,31 +549,107 @@
 #' Paranaiba, P. F., Ferreira, D. F. & Morais, A. R. (2009). Tamanho otimo de
 #' parcelas experimentais: proposicao de metodos de estimacao.
 #' \emph{Revista Brasileira de Biometria}, 27(2), 255-268. \cr
-#' Cargnelutti Filho, A. et al. (2025). \emph{Revista Vivencias}, 21(43), 499-513.
+#' Cargnelutti Filho, A. et al. (2025). \emph{Revista Vivencias}, 21(43), 499-513. \cr
+#' Davies, R. B. (1987). Hypothesis testing when a nuisance parameter is present
+#' only under the alternative. \emph{Biometrika}, 74(1), 33-43. \cr
+#' Efron, B. & Tibshirani, R. J. (1993). \emph{An Introduction to the
+#' Bootstrap}. Chapman & Hall, New York.
 #'
 #' @examples
+#' ## Chickpea uniformity trial, trial 1 (Cargnelutti Filho et al., 2025).
+#' ## One CV per basic-unit form: plot sizes repeat because several shapes
+#' ## give the same area.
 #' X   <- c(1, 2, 2, 3, 3, 4, 6, 6, 6, 6, 9, 12, 12, 18, 18)
 #' CV1 <- c(30.40, 19.51, 23.72, 12.89, 21.32, 16.69, 6.71, 10.75,
 #'          17.58, 14.94, 11.93, 3.18, 8.63, 4.25, 11.41)
 #'
-#' ## Vector interface (single series)
-#' fit <- fit_lrp(X, CV1)
+#' ## A coarse grid runs fast and already reproduces the published Xo to two
+#' ## decimals; the default step = 0.001 refines the third.
+#' fit <- fit_lrp(X, CV1, step = 0.01)
 #' fit
+#' coef(fit)
+#' fit$parameters[c("Breakpoint", "Breakpoint_Response")]
 #'
-#' ## Data-frame interface with one model per trial
-#' df <- rbind(
-#'   data.frame(x = X, cv = CV1, trial = "T1"),
-#'   data.frame(x = X, cv = CV1 * 1.1, trial = "T2")
+#' ## CV expected at plot sizes that were not evaluated
+#' predict(fit, newx = c(2, 5, 7.5, 15))
+#'
+#' \donttest{
+#' ## Full precision (about ten times slower)
+#' fit_lrp(X, CV1)$parameters["Breakpoint"]
+#'
+#' ## Title and styling belong to plot(), not to the fit
+#' plot(fit, title = "Chickpea, trial 1")
+#'
+#' ## Weighting by the number of plots -----------------------------------------
+#' ## The CV of an 18 m2 shape rests on 2 plots, that of a 1 m2 shape on 36.
+#' ## Weighting by n pulls the fit towards the small sizes, so Xo falls.
+#' n_plots <- c(36, 18, 18, 12, 12, 9, 6, 6, 6, 6, 4, 3, 3, 2, 2)
+#' c(unweighted = unname(fit_lrp(X, CV1, step = 0.01)$parameters["Breakpoint"]),
+#'   weighted   = unname(fit_lrp(X, CV1, step = 0.01,
+#'                               weights = n_plots)$parameters["Breakpoint"]))
+#'
+#' ## Straight from a grid, `weights = TRUE` finds the n column itself
+#' grid1 <- as.matrix(dados_ensaio_C1[dados_ensaio_C1$Rep == 1,
+#'                                    paste0("C", 1:8)])
+#' tab <- calc_cv_shapes(grid1)
+#' fit_lrp(tab, x = "x", cv = "cv", step = 0.05, weights = TRUE)$parameters["Breakpoint"]
+#'
+#' ## Uncertainty of Xo -------------------------------------------------------
+#' ## Off by default, because the published procedure reports the point alone.
+#' set.seed(1)
+#' unc <- fit_lrp(X, CV1, step = 0.01, bootstrap = TRUE, n_boot = 500)
+#' unc
+#' unc$bootstrap$ci
+#'
+#' ## p_value tests whether a breakpoint exists at all: a large value means a
+#' ## straight line explains the CV just as well, and no plateau should be read.
+#' unc$bootstrap$p_value
+#'
+#' ## Competing breakpoints ---------------------------------------------------
+#' ## Every local minimum of the SSE profile is reported; those fitting within
+#' ## local_min_tol of the optimum are flagged as competing.
+#' fit$local_minima
+#'
+#' ## Lower the tolerance to flag only near-ties
+#' fit_lrp(X, CV1, step = 0.01, local_min_tol = 0.02)$local_minima
+#'
+#' ## The whole profile, for inspection
+#' plot(fit$sse_profile, type = "l", xlab = "Breakpoint", ylab = "SSE")
+#' abline(v = fit$parameters["Breakpoint"], col = "forestgreen")
+#'
+#' ## What a gradient fitter (nls, nlsLM) seeded at 12 would have returned.
+#' ## The reported fit does not change; $compat shows the cost in SSE.
+#' fit_lrp(X, CV1, step = 0.01, start = 12)$compat
+#'
+#' ## Other arguments ---------------------------------------------------------
+#' ## Restrict the search when an outlier pulls the breakpoint away
+#' fit_lrp(X, CV1, step = 0.01, search_range = c(5, 12))$parameters["Breakpoint"]
+#'
+#' ## "ramp" estimates the descending line from every observation instead of
+#' ## only those below the breakpoint, which can shift the optimum
+#' fit_lrp(X, CV1, step = 0.01, method = "ramp")$parameters["Breakpoint"]
+#'
+#' ## Several trials at once --------------------------------------------------
+#' trials <- rbind(
+#'   data.frame(x = X, cv = CV1,        trial = "T1"),
+#'   data.frame(x = X, cv = CV1 * 0.85, trial = "T2")
 #' )
-#' res <- fit_lrp(df, x = "x", cv = "cv", trial = "trial")
+#' res <- fit_lrp(trials, x = "x", cv = "cv", trial = "trial", step = 0.01)
 #' res$summary
+#'
+#' ## CVxo feeds the number of replications
+#' calc_replicates(treatments = c(5, 10, 20),
+#'                 cv_percent = unname(fit$parameters["Breakpoint_Response"]),
+#'                 lsd_percent = c(10, 20))
+#' }
 #'
 #' @seealso [plot.lrp_fit()], [predict.lrp_fit()]
 #' @export
 fit_lrp <- function(.data = NULL, x = NULL, cv = NULL, trial = NULL,
                     step = 0.001, method = c("segment", "ramp"),
                     search_range = NULL, start = NULL,
-                    local_min_tol = 0.10) {
+                    local_min_tol = 0.10, bootstrap = FALSE,
+                    n_boot = 1000, conf_level = 0.95, weights = FALSE) {
 
   method <- match.arg(method)
 
@@ -319,7 +664,8 @@ fit_lrp <- function(.data = NULL, x = NULL, cv = NULL, trial = NULL,
       stop("Provide numeric `x` and `cv`, or a data frame as `.data`.",
            call. = FALSE)
     return(.lrp_fit_one(x, cv, step, method, search_range, start,
-                        local_min_tol))
+                        local_min_tol, bootstrap, n_boot, conf_level,
+                        .resolve_weights(weights, NULL, length(x))))
   }
 
   ## ---- data-frame interface ----
@@ -335,19 +681,27 @@ fit_lrp <- function(.data = NULL, x = NULL, cv = NULL, trial = NULL,
                  paste(missing_cols, collapse = ", "),
                  paste(names(.data), collapse = ", ")), call. = FALSE)
 
+  wvec <- .resolve_weights(weights, .data, nrow(.data))
+
   if (is.null(trial)) {
     message(sprintf("Using x = '%s', cv = '%s' (single series).", xcol, cvcol))
     return(.lrp_fit_one(.data[[xcol]], .data[[cvcol]], step, method,
-                        search_range, start, local_min_tol))
+                        search_range, start, local_min_tol, bootstrap,
+                        n_boot, conf_level, wvec))
   }
 
   groups <- split(.data, .data[[trial]])
+  ## the weights follow their rows into each trial
+  wsplit <- if (is.null(wvec)) NULL else split(wvec, .data[[trial]])
   message(sprintf("Using x = '%s', cv = '%s', trial = '%s' -> %d trials.",
                   xcol, cvcol, trial, length(groups)))
 
-  fits <- lapply(groups, function(g) .lrp_fit_one(g[[xcol]], g[[cvcol]],
-                                                  step, method, search_range,
-                                                  start, local_min_tol))
+  fits <- Map(function(g, nm) .lrp_fit_one(g[[xcol]], g[[cvcol]],
+                                           step, method, search_range,
+                                           start, local_min_tol,
+                                           bootstrap, n_boot, conf_level,
+                                           if (is.null(wsplit)) NULL else wsplit[[nm]]),
+              groups, names(groups))
   summ <- do.call(rbind, Map(function(f, nm) data.frame(
     trial      = nm,
     a          = round(unname(f$coefficients["a"]), 4),
@@ -361,6 +715,13 @@ fit_lrp <- function(.data = NULL, x = NULL, cv = NULL, trial = NULL,
     n_local    = if (is.null(f$local_minima)) 0L else nrow(f$local_minima),
     stringsAsFactors = FALSE), fits, names(fits)))
   rownames(summ) <- NULL
+
+  ## the interval only earns its columns when it was actually computed
+  if (isTRUE(bootstrap)) {
+    summ$Xo_lwr <- round(vapply(fits, function(f) f$bootstrap$ci[1], 0), 4)
+    summ$Xo_upr <- round(vapply(fits, function(f) f$bootstrap$ci[2], 0), 4)
+    summ$p_breakpoint <- round(vapply(fits, function(f) f$bootstrap$p_value, 0), 4)
+  }
 
   structure(list(fits = fits, summary = summ, method = method),
             class = "lrp_multi")
@@ -391,8 +752,16 @@ predict.lrp_fit <- function(object, newx = NULL, ...) {
 #' @export
 print.lrp_fit <- function(x, ...) {
   cat("Linear Response Plateau (LRP) fit\n")
-  cat("Method:                 ", x$method, "\n")
+  cat("Method:                 ", x$method,
+      if (is.null(x$weights)) "" else " (weighted)", "\n")
   cat("Breakpoint (Xo):        ", sprintf("%.3f", x$parameters["Breakpoint"]), "\n")
+  if (!is.null(x$bootstrap)) {
+    b <- x$bootstrap
+    cat(sprintf("  %.0f%% CI (percentile):  [%.3f, %.3f]   SE %.3f\n",
+                100 * b$conf_level, b$ci[1], b$ci[2], b$se))
+    cat(sprintf("  breakpoint exists:     p = %.4f  (%d resamples)\n",
+                b$p_value, b$n_valid))
+  }
   cat("CV at breakpoint:       ", sprintf("%.3f", x$parameters["Breakpoint_Response"]), "\n")
   cat("R2:", sprintf("%.3f", x$parameters["R2"]),
       " RMSE:", sprintf("%.3f", x$parameters["RMSE"]),

@@ -10,7 +10,10 @@ fit_mcm(
   cv = NULL,
   df = NULL,
   trial = NULL,
-  method = c("nls", "loglinear")
+  method = c("nls", "loglinear"),
+  bootstrap = FALSE,
+  n_boot = 1000,
+  conf_level = 0.95
 )
 }
 \arguments{
@@ -27,9 +30,22 @@ weighting, as a vector or a column name. \code{NULL} = unweighted.}
 \item{method}{estimation method: \code{"nls"} (default, original scale;
 reproduces the chickpea article) or \code{"loglinear"} (Meier & Lessman
 regression).}
+
+\item{bootstrap}{logical; if \code{TRUE}, also estimate the uncertainty of
+\eqn{X_c} by resampling the shapes (default \code{FALSE}). See the section
+"Uncertainty of the optimum".}
+
+\item{n_boot}{number of bootstrap resamples (default 1000), used only when
+\code{bootstrap = TRUE}.}
+
+\item{conf_level}{confidence level of the percentile interval (default 0.95),
+used only when \code{bootstrap = TRUE}.}
 }
 \value{
 An \code{"mcm_fit"} (single series) or \code{"mcm_multi"} (per trial).
+  With \code{bootstrap = TRUE} the fit also carries \code{bootstrap}, a list
+  with \code{ci}, \code{se}, \code{ci_b}, \code{replicates}, \code{n_valid}
+  and \code{conf_level}.
 }
 \description{
 Estimates the optimal plot size by the modified maximum curvature method of
@@ -58,6 +74,21 @@ estimated from fewer plots. Some authors apply it, others do not;
 \code{x}.
 }
 
+\section{Uncertainty of the optimum}{
+
+\code{bootstrap = TRUE} resamples the shapes with replacement, refits, and
+returns a percentile interval for \eqn{X_c} in \code{$bootstrap$ci}.
+
+Unlike [fit_lrp()] and [fit_qrp()], there is no test for the existence of the
+optimum, because there is no breakpoint whose presence is in doubt: the curve
+\eqn{CV = a X^{-b}} has a point of maximum curvature whenever \eqn{b > 0}.
+What can be questioned is \eqn{b}. Its bootstrap interval is therefore
+reported as \code{$bootstrap$ci_b}; if that interval covers zero, the CV does
+not demonstrably fall with plot size and \eqn{X_c} carries no meaning.
+
+Set the random seed before calling to make the result reproducible.
+}
+
 \section{Two ways to call}{
 
 \describe{
@@ -69,13 +100,53 @@ estimated from fewer plots. Some authors apply it, others do not;
 }
 
 \examples{
-grouped <- data.frame(
-  x  = c(1, 2, 4, 8, 2, 4, 8, 16, 3, 6, 12, 24, 6, 12, 24),
-  cv = c(19.55, 15.24, 10.05, 8.20, 14.02, 12.03, 7.71, 7.21,
-         11.51, 9.88, 11.59, 6.69, 7.50, 5.79, 3.08)
-)
-fit <- fit_mcm(grouped$x, grouped$cv)
+## Chickpea uniformity trial, trial 1 (Cargnelutti Filho et al., 2025)
+X   <- c(1, 2, 2, 3, 3, 4, 6, 6, 6, 6, 9, 12, 12, 18, 18)
+CV1 <- c(30.40, 19.51, 23.72, 12.89, 21.32, 16.69, 6.71, 10.75,
+         17.58, 14.94, 11.93, 3.18, 8.63, 4.25, 11.41)
+
+fit <- fit_mcm(X, CV1)
 fit
+
+## The fitted decay CV = a * X^-b, and the CV expected at unobserved sizes
+coef(fit)
+predict(fit, newx = c(2, 5, 7.5, 15))
+
+## "loglinear" is the classic Meier & Lessman route (regression of log CV on
+## log X); "nls" (default) fits on the original scale and is what the modern
+## plot-size articles report. They rarely agree exactly.
+c(nls       = unname(fit$parameters["Breakpoint"]),
+  loglinear = unname(fit_mcm(X, CV1, method = "loglinear")$parameters["Breakpoint"]))
+
+## Federer (1955) weighting: the CV of a large plot size rests on fewer
+## plots, so pass the degrees of freedom of each point to down-weight it.
+n_plots <- 72 / X
+fit_mcm(X, CV1, df = n_plots - 1)$parameters["Breakpoint"]
+
+## Uncertainty of Xc, off by default. There is no existence test here: the
+## curve always has a maximum-curvature point when b > 0, so what gets an
+## interval is b itself.
+set.seed(1)
+unc <- fit_mcm(X, CV1, bootstrap = TRUE, n_boot = 500)
+unc
+unc$bootstrap$ci_b
+
+## One model per trial
+trials <- rbind(
+  data.frame(x = X, cv = CV1,        trial = "T1"),
+  data.frame(x = X, cv = CV1 * 0.85, trial = "T2")
+)
+fit_mcm(trials, x = "x", cv = "cv", trial = "trial")$summary
+
+\donttest{
+plot(fit, title = "Chickpea, trial 1")
+
+## The three CV-based methods on the same data. MCM is the most
+## conservative and QRP the most generous; the ordering is systematic.
+c(MCM = unname(fit$parameters["Breakpoint"]),
+  LRP = unname(fit_lrp(X, CV1, step = 0.01)$parameters["Breakpoint"]),
+  QRP = unname(fit_qrp(X, CV1, step = 0.01)$parameters["Breakpoint"]))
+}
 }
 \references{
 Meier, V. D. & Lessman, K. J. (1971). Estimation of optimum field plot shape

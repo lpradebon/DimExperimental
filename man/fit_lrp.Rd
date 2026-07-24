@@ -13,7 +13,11 @@ fit_lrp(
   method = c("segment", "ramp"),
   search_range = NULL,
   start = NULL,
-  local_min_tol = 0.1
+  local_min_tol = 0.1,
+  bootstrap = FALSE,
+  n_boot = 1000,
+  conf_level = 0.95,
+  weights = FALSE
 )
 }
 \arguments{
@@ -54,6 +58,24 @@ local minima count as competing. A second basin fitting within 10\% of the
 optimum means the breakpoint is not sharply identified. Only labelling is
 affected (the \code{competing} column of \code{$local_minima} and the stars
 in \code{print()}); the fit itself never changes, and no warning is issued.}
+
+\item{bootstrap}{logical; if \code{TRUE}, also estimate the uncertainty of
+the breakpoint by resampling (default \code{FALSE}). Off by default because
+the published procedure reports the point estimate alone. See the section
+"Uncertainty of the breakpoint".}
+
+\item{n_boot}{number of bootstrap resamples (default 1000). Used only when
+\code{bootstrap = TRUE}.}
+
+\item{conf_level}{confidence level of the percentile interval (default 0.95).
+Used only when \code{bootstrap = TRUE}.}
+
+\item{weights}{weights for a weighted least-squares fit. \code{FALSE}
+(default) fits unweighted, as the published procedure does. \code{TRUE}
+uses the \code{n} column of \code{.data}, the number of plots behind each
+CV, as returned by [calc_cv_shapes()]. A single column name or a numeric
+vector are also accepted. See the section "Weighting by the number of
+plots".}
 }
 \value{
 For a single series, an object of class \code{"lrp_fit"}: a list with
@@ -62,8 +84,11 @@ R2, RMSE, AIC, BIC); \code{fitted}; \code{residuals}; \code{data};
 \code{method}; \code{step}; \code{local_min_tol}; \code{local_minima} (the
 competing basins, with their SSE excess over the optimum and a
 \code{competing} flag, or \code{NULL}); \code{sse_profile} (the
-SSE at every candidate breakpoint); and \code{compat} when \code{start} was
-given. \cr
+SSE at every candidate breakpoint); \code{compat} when \code{start} was
+given; and \code{bootstrap} when \code{bootstrap = TRUE}, a list with
+\code{ci}, \code{se}, \code{p_value} (existence of the breakpoint),
+\code{statistic}, \code{replicates}, \code{n_valid} and \code{conf_level}.
+\cr
 With \code{trial}, an object of class \code{"lrp_multi"}: a list with
 \code{summary} (one row per trial), \code{fits} (the individual
 \code{"lrp_fit"} objects) and \code{method}.
@@ -100,6 +125,54 @@ are common, so a warning would fire on almost every fit. Inspect
 whichever basin their starting value lands in; \code{start} reproduces that.
 }
 
+\section{Weighting by the number of plots}{
+
+The CV values are not equally reliable. A shape of area \eqn{X} leaves
+\eqn{n = LC/X} plots in the grid, so the CV of the largest plot size may rest
+on two plots while the smallest rests on dozens. \code{weights = TRUE} fits
+by weighted least squares with \eqn{n} as the weight, which is the natural
+measure of how much information stands behind each point.
+
+This is off by default because it is not what the published procedure does,
+and it moves the answer: the small plot sizes, where the CV is highest, gain
+most of the weight, so the fitted line is pulled towards them and the
+breakpoint typically falls. Report both if you use it.
+
+Two cautions. Weighting corrects for unequal information, not for
+dependence: every CV in the table comes from the same grid of basic units,
+so the points are not independent with or without weights. And a weighted
+fit's \eqn{R^2}, RMSE, AIC and BIC follow the \code{\link[stats]{lm}}
+convention of being computed on weighted residuals, so they cannot be
+compared with those of the unweighted fit.
+}
+
+\section{Uncertainty of the breakpoint}{
+
+\code{bootstrap = TRUE} adds two things the point estimate cannot give.
+
+The first is a percentile confidence interval: the shapes (the rows of the
+CV table) are resampled with replacement, the model is refit on each
+resample, and the empirical quantiles of the resulting breakpoints form the
+interval. Resamples with fewer than three distinct plot sizes cannot place a
+breakpoint and are discarded; \code{$bootstrap$n_valid} reports how many were
+kept. The interval is usually wide, which is the honest reading of a
+breakpoint estimated from a handful of plot sizes.
+
+The second is a test of whether the breakpoint exists at all. Under the null
+hypothesis that the CV falls linearly and never plateaus, the breakpoint is
+not identified, so the usual likelihood-ratio statistic does not have a
+chi-square distribution (Davies, 1987). The null distribution is simulated
+instead: residuals of the straight-line fit are resampled, the plateau model
+is refit to each simulated series, and the p-value is the proportion of
+simulated SSE reductions that match or exceed the observed one. A large
+p-value means a straight line explains the data as well as the plateau, and
+the optimal plot size should not be read off this fit.
+
+Both are computed on the same breakpoint grid as the main fit, so
+\code{step} controls their resolution too. Set the random seed before
+calling to make the result reproducible.
+}
+
 \section{Two ways to call}{
 
 \describe{
@@ -114,28 +187,103 @@ whichever basin their starting value lands in; \code{start} reproduces that.
 }
 
 \examples{
+## Chickpea uniformity trial, trial 1 (Cargnelutti Filho et al., 2025).
+## One CV per basic-unit form: plot sizes repeat because several shapes
+## give the same area.
 X   <- c(1, 2, 2, 3, 3, 4, 6, 6, 6, 6, 9, 12, 12, 18, 18)
 CV1 <- c(30.40, 19.51, 23.72, 12.89, 21.32, 16.69, 6.71, 10.75,
          17.58, 14.94, 11.93, 3.18, 8.63, 4.25, 11.41)
 
-## Vector interface (single series)
-fit <- fit_lrp(X, CV1)
+## A coarse grid runs fast and already reproduces the published Xo to two
+## decimals; the default step = 0.001 refines the third.
+fit <- fit_lrp(X, CV1, step = 0.01)
 fit
+coef(fit)
+fit$parameters[c("Breakpoint", "Breakpoint_Response")]
 
-## Data-frame interface with one model per trial
-df <- rbind(
-  data.frame(x = X, cv = CV1, trial = "T1"),
-  data.frame(x = X, cv = CV1 * 1.1, trial = "T2")
+## CV expected at plot sizes that were not evaluated
+predict(fit, newx = c(2, 5, 7.5, 15))
+
+\donttest{
+## Full precision (about ten times slower)
+fit_lrp(X, CV1)$parameters["Breakpoint"]
+
+## Title and styling belong to plot(), not to the fit
+plot(fit, title = "Chickpea, trial 1")
+
+## Weighting by the number of plots -----------------------------------------
+## The CV of an 18 m2 shape rests on 2 plots, that of a 1 m2 shape on 36.
+## Weighting by n pulls the fit towards the small sizes, so Xo falls.
+n_plots <- c(36, 18, 18, 12, 12, 9, 6, 6, 6, 6, 4, 3, 3, 2, 2)
+c(unweighted = unname(fit_lrp(X, CV1, step = 0.01)$parameters["Breakpoint"]),
+  weighted   = unname(fit_lrp(X, CV1, step = 0.01,
+                              weights = n_plots)$parameters["Breakpoint"]))
+
+## Straight from a grid, `weights = TRUE` finds the n column itself
+grid1 <- as.matrix(dados_ensaio_C1[dados_ensaio_C1$Rep == 1,
+                                   paste0("C", 1:8)])
+tab <- calc_cv_shapes(grid1)
+fit_lrp(tab, x = "x", cv = "cv", step = 0.05, weights = TRUE)$parameters["Breakpoint"]
+
+## Uncertainty of Xo -------------------------------------------------------
+## Off by default, because the published procedure reports the point alone.
+set.seed(1)
+unc <- fit_lrp(X, CV1, step = 0.01, bootstrap = TRUE, n_boot = 500)
+unc
+unc$bootstrap$ci
+
+## p_value tests whether a breakpoint exists at all: a large value means a
+## straight line explains the CV just as well, and no plateau should be read.
+unc$bootstrap$p_value
+
+## Competing breakpoints ---------------------------------------------------
+## Every local minimum of the SSE profile is reported; those fitting within
+## local_min_tol of the optimum are flagged as competing.
+fit$local_minima
+
+## Lower the tolerance to flag only near-ties
+fit_lrp(X, CV1, step = 0.01, local_min_tol = 0.02)$local_minima
+
+## The whole profile, for inspection
+plot(fit$sse_profile, type = "l", xlab = "Breakpoint", ylab = "SSE")
+abline(v = fit$parameters["Breakpoint"], col = "forestgreen")
+
+## What a gradient fitter (nls, nlsLM) seeded at 12 would have returned.
+## The reported fit does not change; $compat shows the cost in SSE.
+fit_lrp(X, CV1, step = 0.01, start = 12)$compat
+
+## Other arguments ---------------------------------------------------------
+## Restrict the search when an outlier pulls the breakpoint away
+fit_lrp(X, CV1, step = 0.01, search_range = c(5, 12))$parameters["Breakpoint"]
+
+## "ramp" estimates the descending line from every observation instead of
+## only those below the breakpoint, which can shift the optimum
+fit_lrp(X, CV1, step = 0.01, method = "ramp")$parameters["Breakpoint"]
+
+## Several trials at once --------------------------------------------------
+trials <- rbind(
+  data.frame(x = X, cv = CV1,        trial = "T1"),
+  data.frame(x = X, cv = CV1 * 0.85, trial = "T2")
 )
-res <- fit_lrp(df, x = "x", cv = "cv", trial = "trial")
+res <- fit_lrp(trials, x = "x", cv = "cv", trial = "trial", step = 0.01)
 res$summary
+
+## CVxo feeds the number of replications
+calc_replicates(treatments = c(5, 10, 20),
+                cv_percent = unname(fit$parameters["Breakpoint_Response"]),
+                lsd_percent = c(10, 20))
+}
 
 }
 \references{
 Paranaiba, P. F., Ferreira, D. F. & Morais, A. R. (2009). Tamanho otimo de
 parcelas experimentais: proposicao de metodos de estimacao.
 \emph{Revista Brasileira de Biometria}, 27(2), 255-268. \cr
-Cargnelutti Filho, A. et al. (2025). \emph{Revista Vivencias}, 21(43), 499-513.
+Cargnelutti Filho, A. et al. (2025). \emph{Revista Vivencias}, 21(43), 499-513. \cr
+Davies, R. B. (1987). Hypothesis testing when a nuisance parameter is present
+only under the alternative. \emph{Biometrika}, 74(1), 33-43. \cr
+Efron, B. & Tibshirani, R. J. (1993). \emph{An Introduction to the
+Bootstrap}. Chapman & Hall, New York.
 }
 \seealso{
 [plot.lrp_fit()], [predict.lrp_fit()]

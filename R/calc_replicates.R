@@ -47,9 +47,35 @@
 #' repeticoes em aveia preta. \emph{Ciencia Rural}, 44(10), 1732-1739.
 #'
 #' @examples
-#' fit <- calc_replicates(treatments = 3:50, cv_percent = 9.25,
-#'                        lsd_percent = c(10, 20, 30), design = "CRD")
+#' ## CV = 9.25% is the CVxo of the black oat trial (Cargnelutti Filho et al.,
+#' ## 2014). How many replications to detect a difference of 10% or 20% of the
+#' ## mean, for a few treatment numbers?
+#' fit <- calc_replicates(treatments = c(5, 10, 20, 30), cv_percent = 9.25,
+#'                        lsd_percent = c(10, 20), design = "CRD")
 #' fit
+#'
+#' ## r_continuous is the fixed point the published tables report; r_optimal is
+#' ## the practical ceiling, floored at 2.
+#' fit$data[fit$data$LSD_percent == 10, ]
+#'
+#' ## A randomized complete block design spends one df per block, so it needs
+#' ## slightly more replications than a completely randomized design.
+#' rcbd <- calc_replicates(treatments = c(5, 10, 20, 30), cv_percent = 9.25,
+#'                         lsd_percent = c(10, 20), design = "RCBD")
+#' cbind(CRD = fit$data$r_optimal, RCBD = rcbd$data$r_optimal)
+#'
+#' \donttest{
+#' ## The full published table: every treatment number from 3 to 50, at three
+#' ## precision levels.
+#' full <- calc_replicates(treatments = 3:50, cv_percent = 9.25,
+#'                         lsd_percent = c(10, 20, 30), design = "CRD")
+#' head(full$data)
+#' plot(full)
+#'
+#' ## A stricter test costs replications
+#' calc_replicates(treatments = 10, cv_percent = 9.25, lsd_percent = 10,
+#'                 alpha = 0.01)$data[, c("Alpha", "r_continuous", "r_optimal")]
+#' }
 #' @export
 calc_replicates <- function(treatments, cv_percent, lsd_percent, alpha = 0.05,
                             design = c("CRD", "RCBD"),

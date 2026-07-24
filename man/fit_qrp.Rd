@@ -12,7 +12,11 @@ fit_qrp(
   step = 0.001,
   search_range = NULL,
   start = NULL,
-  local_min_tol = 0.1
+  local_min_tol = 0.1,
+  bootstrap = FALSE,
+  n_boot = 1000,
+  conf_level = 0.95,
+  weights = FALSE
 )
 }
 \arguments{
@@ -38,13 +42,34 @@ single smooth basin.}
 local minima count as competing. Only labelling is affected (the
 \code{competing} column of \code{$local_minima} and the stars in
 \code{print()}); the fit never changes, and no warning is issued.}
+
+\item{bootstrap}{logical; if \code{TRUE}, also estimate the uncertainty of
+the breakpoint by resampling (default \code{FALSE}). See the section
+"Uncertainty of the breakpoint".}
+
+\item{n_boot}{number of bootstrap resamples (default 1000), used only when
+\code{bootstrap = TRUE}.}
+
+\item{conf_level}{confidence level of the percentile interval (default 0.95),
+used only when \code{bootstrap = TRUE}.}
+
+\item{weights}{weights for a weighted least-squares fit. \code{FALSE}
+(default) fits unweighted, as the published procedure does. \code{TRUE}
+uses the \code{n} column of \code{.data} (the number of plots behind each
+CV, as returned by [calc_cv_shapes()]); a column name or a numeric vector
+are also accepted. The caveats are the same as for [fit_lrp()]: the
+breakpoint typically falls, the points remain dependent, and the weighted
+fit statistics are not comparable with the unweighted ones.}
 }
 \value{
 A \code{"qrp_fit"} (single series) or \code{"qrp_multi"} (per trial).
   The fit also carries \code{local_minima} (competing basins with their SSE
   excess over the optimum and a \code{competing} flag, or \code{NULL}),
-  \code{local_min_tol}, \code{sse_profile}, and
-  \code{compat} when \code{start} was given. Because the quadratic-plateau
+  \code{local_min_tol}, \code{sse_profile},
+  \code{compat} when \code{start} was given, and \code{bootstrap} when
+  \code{bootstrap = TRUE} (a list with \code{ci}, \code{se}, \code{p_value},
+  \code{statistic}, \code{replicates}, \code{n_valid}, \code{conf_level} and
+  \code{null_model}). Because the quadratic-plateau
   joins smoothly, this profile is typically a single basin, unlike the
   stepped profile of [fit_lrp()].
 }
@@ -68,12 +93,66 @@ curvature, so it is fit by least squares with no starting values, and the
 }
 }
 
+\section{Uncertainty of the breakpoint}{
+
+\code{bootstrap = TRUE} resamples the shapes (the rows of the CV table) with
+replacement, refits on each resample, and returns a percentile interval for
+\eqn{X_o} in \code{$bootstrap$ci}, together with a bootstrap standard error.
+
+It also tests whether the plateau is warranted. The null here is not the one
+used by [fit_lrp()]: a quadratic-plateau that never plateaus is simply a
+quadratic, so the null model is the unconstrained quadratic fitted on every
+observation, and the p-value is the proportion of null resamples whose SSE
+reduction matches or exceeds the observed one. A large p-value means the
+plateau segment buys nothing over a plain quadratic, and \eqn{X_o} should not
+be read as an optimal plot size.
+
+Set the random seed before calling to make the result reproducible.
+}
+
 \examples{
+## Chickpea uniformity trial, trial 1 (Cargnelutti Filho et al., 2025)
 X   <- c(1, 2, 2, 3, 3, 4, 6, 6, 6, 6, 9, 12, 12, 18, 18)
 CV1 <- c(30.40, 19.51, 23.72, 12.89, 21.32, 16.69, 6.71, 10.75,
          17.58, 14.94, 11.93, 3.18, 8.63, 4.25, 11.41)
-fit <- fit_qrp(X, CV1)
+
+## A coarse grid runs fast; the default step = 0.001 refines the third decimal
+fit <- fit_qrp(X, CV1, step = 0.01)
 fit
+
+## The quadratic joins its plateau smoothly, so the optimum is larger than
+## the one the broken-line model gives on the same data
+coef(fit)
+predict(fit, newx = c(2, 5, 7.5, 15))
+
+\donttest{
+## Full precision (about eight times slower)
+fit_qrp(X, CV1)$parameters["Breakpoint"]
+
+plot(fit, title = "Chickpea, trial 1")
+
+## The smooth join makes the SSE profile a single basin, unlike the stepped
+## profile of fit_lrp(): competing minima are rare and much worse.
+plot(fit$sse_profile, type = "l", xlab = "Breakpoint", ylab = "SSE")
+fit$local_minima
+
+## Uncertainty of Xo, off by default. The p-value asks whether the plateau
+## buys anything over a plain quadratic.
+set.seed(1)
+unc <- fit_qrp(X, CV1, step = 0.01, bootstrap = TRUE, n_boot = 500)
+unc
+unc$bootstrap$ci
+
+## Restrict the breakpoint search
+fit_qrp(X, CV1, step = 0.01, search_range = c(5, 15))$parameters["Breakpoint"]
+
+## One model per trial, with a summary table
+trials <- rbind(
+  data.frame(x = X, cv = CV1,        trial = "T1"),
+  data.frame(x = X, cv = CV1 * 0.85, trial = "T2")
+)
+fit_qrp(trials, x = "x", cv = "cv", trial = "trial", step = 0.01)$summary
+}
 }
 \seealso{
 [fit_lrp()], [plot.qrp_fit()]

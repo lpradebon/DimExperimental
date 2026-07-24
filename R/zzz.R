@@ -2,4 +2,5 @@
 #' @importFrom stats predict
 "_PACKAGE"
 
-utils::globalVariables(c("cv", "trial", ".y", "Treatments", "LSD"))
+utils::globalVariables(c("cv", "trial", ".y", "Treatments", "LSD",
+                         "xpos", "ypos", "value"))

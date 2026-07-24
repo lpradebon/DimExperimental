@@ -60,7 +60,7 @@ cv        <- c(22.1, 18.4, 14.2, 11.8, 10.1, 9.3, 8.1, 7.6, 7.4, 7.3)
 fit <- fit_lrp(x = plot_size, cv = cv)
 fit
 #> Linear Response Plateau (LRP) fit
-#> Method:                  segment 
+#> Method:                  segment  
 #> Breakpoint (Xo):         8.648 
 #> CV at breakpoint:        7.940 
 #> R2: 0.963  RMSE: 0.935  AIC: 35.0  BIC: 36.3 
